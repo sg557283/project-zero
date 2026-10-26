@@ -54,6 +54,14 @@ class CommandParserTest {
         assertEquals(AssistantCommand.RunShortcut("morning routine"), CommandParser.parse("run Morning Routine"))
     }
 
+    @Test fun parsesYouTubeSearchAndWhatsAppMessageDrafts() {
+        assertEquals(AssistantCommand.SearchYouTube("Shreeyansh"), CommandParser.parse("Open YouTube and search for Shreeyansh"))
+        assertEquals(
+            AssistantCommand.DraftWhatsAppMessage("Mamma", "I’m coming home early."),
+            CommandParser.parse("Open WhatsApp and text Mamma: I’m coming home early."),
+        )
+    }
+
     @Test fun parsesHelpAndUnsupportedInput() {
         assertEquals(AssistantCommand.Help, CommandParser.parse("help"))
         assertEquals(AssistantCommand.Unsupported, CommandParser.parse(""))

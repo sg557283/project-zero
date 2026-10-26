@@ -29,11 +29,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.zero.assistant.core.ModelTransferState
+import com.zero.assistant.core.OfflineTtsVoice
 import com.zero.assistant.data.SpeechModelManager
 import com.zero.assistant.core.SpeechModelSpec
 
 @Composable
-internal fun SpeechModelsScreen(modifier: Modifier, manager: SpeechModelManager) {
+internal fun SpeechModelsScreen(
+    modifier: Modifier,
+    manager: SpeechModelManager,
+    ttsVoices: List<OfflineTtsVoice>,
+    selectedTtsVoiceId: String?,
+    onSelectTtsVoice: (String) -> Boolean,
+    onInstallTtsVoices: () -> String,
+) {
     val states by manager.states.collectAsState()
     val activeModelId by manager.activeModelId.collectAsState()
     var confirmDownload by remember { mutableStateOf<SpeechModelSpec?>(null) }
@@ -43,14 +51,37 @@ internal fun SpeechModelsScreen(modifier: Modifier, manager: SpeechModelManager)
     Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Text("Speech models", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Text(
-            "On-device recognition models are stored privately. Text-to-speech voices are managed separately by Android.",
+            "Browse offline recognition models and installed offline speech voices. Voice packages are provided and installed by the Android speech engine.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
-        feedback?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        feedback?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(manager.catalog.models, key = { it.id }) { spec ->
+            item { Text("Text-to-speech voices", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Android voice packages", fontWeight = FontWeight.SemiBold)
+                        Text("${ttsVoices.size} installed offline ${if (ttsVoices.size == 1) "voice" else "voices"} available")
+                        Button(onClick = { feedback = onInstallTtsVoices() }) { Text("Browse / install voice data") }
+                    }
+                }
+            }
+            if (ttsVoices.isEmpty()) {
+                item { Text("No installed offline voices are currently reported by the selected Android speech engine.") }
+            }
+            items(ttsVoices, key = { "tts:${it.id}" }) { voice ->
+                TtsVoiceRow(
+                    voice = voice,
+                    selected = selectedTtsVoiceId == voice.id,
+                    onSelect = {
+                        feedback = if (onSelectTtsVoice(voice.id)) "Selected ${voice.displayName}." else "Android could not select that voice."
+                    },
+                )
+            }
+            item { Text("Speech recognition models", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+            items(manager.catalog.models, key = { "model:${it.id}" }) { spec ->
                 val state = states[spec.id] ?: ModelTransferState.Idle
                 ModelRow(
                     spec = spec,
@@ -108,6 +139,19 @@ internal fun SpeechModelsScreen(modifier: Modifier, manager: SpeechModelManager)
             },
             dismissButton = { TextButton(onClick = { confirmUninstall = null }) { Text("Keep model") } },
         )
+    }
+}
+
+@Composable
+private fun TtsVoiceRow(voice: OfflineTtsVoice, selected: Boolean, onSelect: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(voice.languageLabel, fontWeight = FontWeight.SemiBold)
+            Text("${voice.displayName} · ${voice.languageTag} · offline", style = MaterialTheme.typography.bodySmall)
+            Text("Quality ${voice.quality} · installed", style = MaterialTheme.typography.labelSmall)
+            if (selected) Text("Selected", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+            else OutlinedButton(onClick = onSelect) { Text("Select voice") }
+        }
     }
 }
 

@@ -7,9 +7,18 @@ enum class SpeechLanguage(val tag: String, val label: String) {
     Hindi("hi-IN", "Hindi"),
 }
 
+data class OfflineTtsVoice(
+    val id: String,
+    val displayName: String,
+    val languageTag: String,
+    val languageLabel: String,
+    val quality: Int,
+)
+
 sealed interface SpeechOutputStatus {
     data object Initializing : SpeechOutputStatus
     data class Ready(val language: SpeechLanguage) : SpeechOutputStatus
+    data class ReadyWithVoice(val voice: OfflineTtsVoice) : SpeechOutputStatus
     data class LanguageUnavailable(val language: SpeechLanguage) : SpeechOutputStatus
     data object InitializationFailed : SpeechOutputStatus
     data object SpeakFailed : SpeechOutputStatus
@@ -19,6 +28,8 @@ sealed interface SpeechOutputStatus {
 interface SpeechOutputEngine {
     fun initialize(onInitialized: (Boolean) -> Unit)
     fun selectOfflineVoice(languageTag: String): Boolean
+    fun availableOfflineVoices(): List<OfflineTtsVoice> = emptyList()
+    fun selectVoice(voiceId: String): Boolean = false
     fun speak(text: String): Boolean
     fun stop()
     fun shutdown()
@@ -43,6 +54,16 @@ class SpeechOutputController(
     fun setLanguage(language: SpeechLanguage) {
         this.language = language
         if (initialized && !closed) configureLanguage()
+    }
+
+    fun availableOfflineVoices(): List<OfflineTtsVoice> = engine.availableOfflineVoices()
+
+    fun selectVoice(voiceId: String): Boolean {
+        if (!initialized || closed) return false
+        val voice = engine.availableOfflineVoices().firstOrNull { it.id == voiceId } ?: return false
+        if (!engine.selectVoice(voiceId)) return false
+        updateStatus(SpeechOutputStatus.ReadyWithVoice(voice))
+        return true
     }
 
     fun speak(text: String) {
@@ -107,7 +128,7 @@ class SpeechOutputController(
     }
 
     private fun speakWhenReady(text: String) {
-        if (status !is SpeechOutputStatus.Ready) return
+        if (status !is SpeechOutputStatus.Ready && status !is SpeechOutputStatus.ReadyWithVoice) return
         if (!engine.speak(text)) updateStatus(SpeechOutputStatus.SpeakFailed)
     }
 

@@ -4,6 +4,8 @@ sealed interface AssistantCommand {
     data class OpenApp(val app: AppTarget) : AssistantCommand
     data class SetFlashlight(val enabled: Boolean) : AssistantCommand
     data class CallNumber(val number: String) : AssistantCommand
+    data class SearchYouTube(val query: String) : AssistantCommand
+    data class DraftWhatsAppMessage(val contact: String, val message: String) : AssistantCommand
     data class SaveNote(val text: String) : AssistantCommand
     data class DraftReminder(val title: String) : AssistantCommand
     data class RunShortcut(val name: String) : AssistantCommand
@@ -24,6 +26,8 @@ enum class AppTarget {
 
 object CommandParser {
     private val callPattern = Regex("^\\s*(?:call|dial|phone|कॉल)\\s+(\\+?[\\d\\s().-]{7,24})\\s*$", RegexOption.IGNORE_CASE)
+    private val youtubeSearchPattern = Regex("^\\s*(?:open\\s+)?youtube\\s+and\\s+search\\s+for\\s+(.{1,160})\\s*$", RegexOption.IGNORE_CASE)
+    private val whatsappMessagePattern = Regex("^\\s*(?:open\\s+)?whatsapp\\s+and\\s+(?:text|message)\\s+([^:]{1,80}):\\s*(.{1,1000})\\s*$", RegexOption.IGNORE_CASE)
     private val reminderPattern = Regex("^\\s*(?:remind me to|remind me|याद दिलाना)\\s+(.{1,160})$", RegexOption.IGNORE_CASE)
     private val notePattern = Regex("^\\s*(?:note|save note|write note|नोट)\\s+(.{1,2000})$", RegexOption.IGNORE_CASE)
     private val timePhrases = listOf("time", "kitne baje", "samay", "waqt", "कितने बजे", "समय क्या")
@@ -31,6 +35,14 @@ object CommandParser {
     private val helpPhrases = listOf("help", "what can you do", "commands", "madad", "मदद", "सहायता")
 
     fun parse(input: String): AssistantCommand {
+        youtubeSearchPattern.matchEntire(input)?.groupValues?.get(1)?.trim()?.let { query ->
+            if (query.isNotBlank()) return AssistantCommand.SearchYouTube(query)
+        }
+        whatsappMessagePattern.matchEntire(input)?.groupValues?.let { groups ->
+            val contact = groups[1].trim()
+            val message = groups[2].trim()
+            if (contact.isNotBlank() && message.isNotBlank()) return AssistantCommand.DraftWhatsAppMessage(contact, message)
+        }
         callPattern.matchEntire(input)?.groupValues?.get(1)?.let { rawNumber ->
             val number = rawNumber.filter { it.isDigit() || it == '+' }
             if (number.count(Char::isDigit) in 7..15) return AssistantCommand.CallNumber(number)

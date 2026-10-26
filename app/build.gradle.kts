@@ -22,8 +22,8 @@ android {
         applicationId = "com.zero.assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 170707
+        versionName = "17.7.07"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

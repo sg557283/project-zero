@@ -61,6 +61,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -97,6 +98,7 @@ import com.zero.assistant.core.SpeechLanguage
 import com.zero.assistant.core.SpeechOutputController
 import com.zero.assistant.core.SpeechOutputEngine
 import com.zero.assistant.core.SpeechOutputStatus
+import com.zero.assistant.core.OfflineTtsVoice
 import com.zero.assistant.core.WakeWord
 import com.zero.assistant.data.PreferencesHistoryStorage
 import com.zero.assistant.data.BatteryAlertManager
@@ -105,6 +107,8 @@ import com.zero.assistant.data.ProductivityPreferences
 import com.zero.assistant.data.PlannerPreferences
 import com.zero.assistant.data.ReminderScheduler
 import com.zero.assistant.data.SpeechModelManager
+import com.zero.assistant.data.WakeWordService
+import com.zero.assistant.data.WakeWordSettings
 import com.zero.assistant.core.ReminderRepository
 import java.text.DateFormat
 import java.time.ZoneId
@@ -124,10 +128,11 @@ private val Ink = Color.White
 class MainActivity : ComponentActivity() {
     private var speechOutputController: SpeechOutputController? = null
     private val speechOutputStatus = mutableStateOf<SpeechOutputStatus>(SpeechOutputStatus.Initializing)
+    private val offlineTtsVoices = mutableStateOf<List<OfflineTtsVoice>>(emptyList())
     private lateinit var speechModelManager: SpeechModelManager
     private lateinit var batteryAlertManager: BatteryAlertManager
     private val batteryStatus = mutableStateOf(BatteryStatus(0, false))
-    private val appForeground = mutableStateOf(false)
+    private val pendingVoiceCommand = mutableStateOf<String?>(null)
     private var recognizer: Recognizer? = null
     private var speechService: SpeechService? = null
     private var recognitionActive = false
@@ -138,12 +143,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingVoiceCommand.value = intent.getStringExtra(WakeWordSettings.EXTRA_COMMAND)
         recognitionStateMachine = OfflineRecognitionStateMachine { state ->
             runOnUiThread { offlineRecognitionState.value = state }
         }
         val initialLanguage = if (Locale.getDefault().language == "hi") SpeechLanguage.Hindi else SpeechLanguage.English
         speechOutputController = SpeechOutputController(AndroidTextToSpeechEngine(applicationContext)) { status ->
-            runOnUiThread { speechOutputStatus.value = status }
+            runOnUiThread {
+                speechOutputStatus.value = status
+                offlineTtsVoices.value = speechOutputController?.availableOfflineVoices().orEmpty()
+            }
         }
         speechOutputController?.setLanguage(initialLanguage)
         speechOutputController?.initialize()
@@ -166,9 +175,28 @@ class MainActivity : ComponentActivity() {
                 batteryAlertManager = batteryAlertManager,
                 batteryStatus = batteryStatus.value,
                 speechOutputStatus = speechOutputStatus.value,
-                appForeground = appForeground.value,
+                offlineTtsVoices = offlineTtsVoices.value,
+                selectTtsVoice = { voiceId -> speechOutputController?.selectVoice(voiceId) == true },
+                installTtsVoices = {
+                    val installIntent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
+                    runCatching {
+                        if (installIntent.resolveActivity(packageManager) == null) "No Android text-to-speech voice installer is available."
+                        else {
+                            startActivity(installIntent)
+                            "Opened Android's voice library. Installed offline voices will appear here when you return."
+                        }
+                    }.getOrElse { "Android's text-to-speech voice installer could not be opened." }
+                },
+                voiceCommand = pendingVoiceCommand.value,
+                onVoiceCommandConsumed = { pendingVoiceCommand.value = null },
             )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingVoiceCommand.value = intent.getStringExtra(WakeWordSettings.EXTRA_COMMAND)
     }
 
     private fun startOfflineRecognition(
@@ -277,7 +305,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        appForeground.value = false
         finishRecognition("Voice input was stopped when ZERO left the screen. Tap the microphone to try again.")
         batteryAlertManager.stopObserving(this)
         super.onStop()
@@ -285,10 +312,35 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        appForeground.value = true
         if (::batteryAlertManager.isInitialized) {
             batteryAlertManager.observe(this) { status -> runOnUiThread { batteryStatus.value = status } }
             batteryStatus.value = batteryAlertManager.status()
+        }
+        if (WakeWordSettings.enabled(this) && ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startWakeWordService()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        offlineTtsVoices.value = speechOutputController?.availableOfflineVoices().orEmpty()
+    }
+
+    private fun startWakeWordService() {
+        runCatching {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, WakeWordService::class.java).setAction(WakeWordSettings.ACTION_START),
+            )
+        }.onFailure { WakeWordSettings.setActive(this, false, it.message ?: "Android could not start background listening.") }
+    }
+
+    private fun stopWakeWordService() {
+        runCatching {
+            startService(Intent(this, WakeWordService::class.java).setAction(WakeWordSettings.ACTION_STOP))
+        }.onFailure {
+            WakeWordSettings.setEnabled(this, false)
+            stopService(Intent(this, WakeWordService::class.java))
         }
     }
 
@@ -323,6 +375,29 @@ private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
             .filter { !it.isNetworkConnectionRequired && it.locale.language == requested.language }
             .sortedByDescending { it.locale.country == requested.country }
             .firstOrNull() ?: return false
+        return runCatching {
+            engine.voice = voice
+            true
+        }.getOrDefault(false)
+    }
+
+    override fun availableOfflineVoices(): List<OfflineTtsVoice> = textToSpeech?.voices.orEmpty()
+        .filterNot { it.isNetworkConnectionRequired }
+        .map { voice ->
+            OfflineTtsVoice(
+                id = voice.name,
+                displayName = voice.name.replace('_', ' '),
+                languageTag = voice.locale.toLanguageTag(),
+                languageLabel = voice.locale.getDisplayName(voice.locale),
+                quality = voice.quality,
+            )
+        }
+        .distinctBy { it.id }
+        .sortedWith(compareBy<OfflineTtsVoice> { it.languageLabel }.thenBy { it.displayName })
+
+    override fun selectVoice(voiceId: String): Boolean {
+        val engine = textToSpeech ?: return false
+        val voice = engine.voices.orEmpty().firstOrNull { it.name == voiceId && !it.isNetworkConnectionRequired } ?: return false
         return runCatching {
             engine.voice = voice
             true
@@ -377,8 +452,12 @@ private fun ZeroApp(
     recognitionState: OfflineRecognitionState,
     batteryAlertManager: BatteryAlertManager,
     batteryStatus: BatteryStatus,
-    appForeground: Boolean,
     speechOutputStatus: SpeechOutputStatus,
+    offlineTtsVoices: List<OfflineTtsVoice>,
+    selectTtsVoice: (String) -> Boolean,
+    installTtsVoices: () -> String,
+    voiceCommand: String?,
+    onVoiceCommandConsumed: () -> Unit,
 ) {
     val context = LocalContext.current
     val history = remember { CommandHistory(PreferencesHistoryStorage(context.applicationContext)) }
@@ -386,6 +465,7 @@ private fun ZeroApp(
     val reminderScheduler = remember { ReminderScheduler(context.applicationContext, reminderRepository) }
     val productivityPreferences = remember { ProductivityPreferences(context.applicationContext) }
     val wakePreferences = remember { context.getSharedPreferences("zero_wake_word", Context.MODE_PRIVATE) }
+    val ttsPreferences = remember { context.getSharedPreferences("zero_tts", Context.MODE_PRIVATE) }
     val noteRepository = remember { NoteRepository(productivityPreferences) }
     val shortcutRepository = remember { ShortcutRepository(productivityPreferences) }
     val activeModelId by modelManager.activeModelId.collectAsState()
@@ -395,21 +475,57 @@ private fun ZeroApp(
     var speechLanguageTag by rememberSaveable {
         mutableStateOf(if (Locale.getDefault().language == "hi") "hi-IN" else "en-US")
     }
-    var wakeWordEnabled by remember { mutableStateOf(wakePreferences.getBoolean("enabled", false)) }
+    var wakeWordEnabled by remember { mutableStateOf(WakeWordSettings.enabled(context)) }
+    var wakeWordActive by remember { mutableStateOf(WakeWordSettings.active(context)) }
     var wakeWordPhrase by remember { mutableStateOf(wakePreferences.getString("phrase", WakeWord.DEFAULT_PHRASE) ?: WakeWord.DEFAULT_PHRASE) }
+    var wakeWordError by remember { mutableStateOf(WakeWordSettings.error(context)) }
+    var selectedTtsVoiceId by remember { mutableStateOf(ttsPreferences.getString("voice_id", null)) }
     var input by rememberSaveable { mutableStateOf("") }
     var isListening by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var showIntro by remember { mutableStateOf(true) }
     var pendingFlashlightCommand by remember { mutableStateOf<String?>(null) }
     var pendingShortcutContinuation by remember { mutableStateOf<(() -> Unit)?>(null) }
     var pendingCallNumber by remember { mutableStateOf<String?>(null) }
+    var pendingWhatsAppDraft by remember { mutableStateOf<AssistantCommand.DraftWhatsAppMessage?>(null) }
     var plannerDraftTitle by remember { mutableStateOf<String?>(null) }
     var plannerVoiceCallback by remember { mutableStateOf<((String) -> Unit)?>(null) }
     var notificationsGranted by remember {
         mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
     }
+    var pendingWakeStart by remember { mutableStateOf(false) }
     val lines = rememberSaveable(saver = chatSaver) { mutableStateListOf(ChatLine(true, "Hi, I'm ZERO. What can I do for you?")) }
     lateinit var dispatchCommand: (String, (() -> Unit)?) -> Unit
+
+    DisposableEffect(wakePreferences) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                "enabled" -> wakeWordEnabled = WakeWordSettings.enabled(context)
+                "active" -> wakeWordActive = WakeWordSettings.active(context)
+                "error" -> wakeWordError = WakeWordSettings.error(context)
+            }
+        }
+        wakePreferences.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { wakePreferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
+    fun startBackgroundListening() {
+        WakeWordSettings.setEnabled(context, true)
+        try {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, WakeWordService::class.java).setAction(WakeWordSettings.ACTION_START),
+            )
+        } catch (failure: Exception) {
+            WakeWordSettings.setActive(context, false, failure.message ?: "Android could not start the microphone service.")
+            notice = WakeWordSettings.error(context)
+        }
+    }
+
+    fun stopBackgroundListening() {
+        WakeWordSettings.setEnabled(context, false)
+        runCatching { context.startService(Intent(context, WakeWordService::class.java).setAction(WakeWordSettings.ACTION_STOP)) }
+    }
 
     val microphonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startListening({ spoken ->
@@ -437,7 +553,20 @@ private fun ZeroApp(
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         notificationsGranted = granted
         if (granted) reminderScheduler.rescheduleAll()
-        if (!granted) notice = "Notifications are disabled. Reminders remain saved but Android won't display them."
+        if (pendingWakeStart) {
+            pendingWakeStart = false
+            if (granted) startBackgroundListening()
+            else {
+                WakeWordSettings.setEnabled(context, false)
+                notice = "Notification permission is required for the persistent microphone controls. Background listening remains off."
+            }
+        } else if (!granted) notice = "Notifications are disabled. Reminders remain saved but Android won't display them."
+    }
+    fun requestWakeWordStart() {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            pendingWakeStart = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else startBackgroundListening()
     }
     val plannerMicrophonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val callback = plannerVoiceCallback
@@ -447,8 +576,7 @@ private fun ZeroApp(
     }
     val wakeWordPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            wakeWordEnabled = true
-            wakePreferences.edit().putBoolean("enabled", true).apply()
+            requestWakeWordStart()
             page = Page.Home
         } else {
             notice = "Microphone permission was denied. Wake-word listening remains off."
@@ -464,6 +592,12 @@ private fun ZeroApp(
     dispatchCommand = { command, onComplete ->
         when (val parsed = CommandParser.parse(command)) {
             is AssistantCommand.CallNumber -> pendingCallNumber = parsed.number
+            is AssistantCommand.SearchYouTube -> {
+                val response = openYouTubeSearch(context, parsed.query)
+                showResult(command, response)
+                onComplete?.invoke()
+            }
+            is AssistantCommand.DraftWhatsAppMessage -> pendingWhatsAppDraft = parsed
             is AssistantCommand.RunShortcut -> {
                 val shortcut = shortcutRepository.all().firstOrNull { it.enabled && it.name.equals(parsed.name, ignoreCase = true) }
                 if (shortcut == null) {
@@ -499,26 +633,23 @@ private fun ZeroApp(
         }
     }
     val runCommand: (String) -> Unit = { dispatchCommand(it, null) }
-
-    LaunchedEffect(wakeWordEnabled, recognitionState, appForeground) {
-        val canRearm = when (val state = recognitionState) {
-            OfflineRecognitionState.Idle, OfflineRecognitionState.Cancelled, is OfflineRecognitionState.Result -> true
-            is OfflineRecognitionState.Failed -> state.message.startsWith("I didn't catch that.")
-            is OfflineRecognitionState.LoadingModel, is OfflineRecognitionState.Listening -> false
+    LaunchedEffect(Unit) {
+        delay(1_000)
+        showIntro = false
+    }
+    LaunchedEffect(voiceCommand) {
+        voiceCommand?.let {
+            page = Page.Home
+            dispatchCommand(it, null)
+            onVoiceCommandConsumed()
         }
-        if (wakeWordEnabled && appForeground && canRearm) {
-            delay(700)
-            if (wakeWordEnabled && appForeground) {
-                startListening({ transcript ->
-                    val match = WakeWord.match(transcript, wakeWordPhrase)
-                    if (match != null) {
-                        if (match.command.isBlank()) notice = "Wake word heard. Say a command."
-                        else {
-                            input = ""
-                            dispatchCommand(match.command, null)
-                        }
-                    }
-                }, { isListening = it })
+    }
+    LaunchedEffect(speechOutputStatus, selectedTtsVoiceId) {
+        val selectedVoiceId = selectedTtsVoiceId
+        if (speechOutputStatus is SpeechOutputStatus.Ready && selectedVoiceId != null) {
+            if (offlineTtsVoices.any { it.id == selectedVoiceId } && !selectTtsVoice(selectedVoiceId)) {
+                selectedTtsVoiceId = null
+                ttsPreferences.edit().remove("voice_id").apply()
             }
         }
     }
@@ -532,14 +663,17 @@ private fun ZeroApp(
         onSurface = Ink,
         error = Color(0xFFFF6B6B),
     )) {
+        if (showIntro) {
+            IntroScreen()
+        } else {
         val background = MaterialTheme.colorScheme.background
         Scaffold(containerColor = background, topBar = {
             TopAppBar(
                 title = {
                     Text(
                         when (page) {
-                            Page.Home -> "ZERO"
-                            Page.SpeechModels -> "Speech Models"
+                            Page.Home -> "ZERO-Assist 17.7.07"
+                            Page.SpeechModels -> "Voice Library"
                             Page.Planner -> "Planner"
                             Page.BatteryAlerts -> "Battery Alerts"
                             Page.Notes -> "Notes"
@@ -564,7 +698,7 @@ private fun ZeroApp(
             when (page) {
                 Page.Home -> HomeScreen(
                     Modifier.padding(padding), lines, input, { input = it }, notice,
-                    recognitionState, isListening,
+                    recognitionState, isListening || wakeWordActive,
                     batteryStatus = batteryStatus,
                     reminders = reminderRepository.all(),
                     wakeWordEnabled = wakeWordEnabled,
@@ -587,10 +721,7 @@ private fun ZeroApp(
                         } else microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
                     },
                     onStopListening = {
-                        if (wakeWordEnabled) {
-                            wakeWordEnabled = false
-                            wakePreferences.edit().putBoolean("enabled", false).apply()
-                        }
+                        if (wakeWordEnabled) stopBackgroundListening()
                         stopListening()
                     },
                     onShortcut = { label ->
@@ -616,6 +747,8 @@ private fun ZeroApp(
                     Modifier.padding(padding), speechOutput, { speechOutput = it },
                     speechLanguageTag, {
                         speechLanguageTag = it
+                        selectedTtsVoiceId = null
+                        ttsPreferences.edit().remove("voice_id").apply()
                         setSpeechLanguage(if (it == "hi-IN") SpeechLanguage.Hindi else SpeechLanguage.English)
                     }, activeModelId, speechOutputStatus, { language ->
                         speechLanguageTag = language.tag
@@ -623,24 +756,38 @@ private fun ZeroApp(
                         testSpeech(language)
                     }, stopSpeech,
                     wakeWordEnabled = wakeWordEnabled,
+                    wakeWordActive = wakeWordActive,
+                    wakeWordError = wakeWordError,
                     wakeWordPhrase = wakeWordPhrase,
                     onWakeWordPhrase = {
                         wakeWordPhrase = it
-                        wakePreferences.edit().putString("phrase", it).apply()
+                        WakeWordSettings.setPhrase(context, it)
                     },
                     onWakeWordEnabled = { enabled ->
                         if (enabled && ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                             wakeWordPermission.launch(Manifest.permission.RECORD_AUDIO)
                         } else {
-                            wakeWordEnabled = enabled
-                            wakePreferences.edit().putBoolean("enabled", enabled).apply()
+                            if (enabled) requestWakeWordStart() else stopBackgroundListening()
                             if (!enabled && isListening) stopListening()
                             if (enabled) page = Page.Home
                         }
                     },
                     onNavigate = { page = it },
                 )
-                Page.SpeechModels -> SpeechModelsScreen(Modifier.padding(padding), modelManager)
+                Page.SpeechModels -> SpeechModelsScreen(
+                    modifier = Modifier.padding(padding),
+                    manager = modelManager,
+                    ttsVoices = offlineTtsVoices,
+                    selectedTtsVoiceId = selectedTtsVoiceId,
+                    onSelectTtsVoice = { voiceId ->
+                        if (selectTtsVoice(voiceId)) {
+                            selectedTtsVoiceId = voiceId
+                            ttsPreferences.edit().putString("voice_id", voiceId).apply()
+                            true
+                        } else false
+                    },
+                    onInstallTtsVoices = installTtsVoices,
+                )
                 Page.Planner -> PlannerScreen(
                     modifier = Modifier.padding(padding),
                     initialTitle = plannerDraftTitle,
@@ -722,6 +869,53 @@ private fun ZeroApp(
                 },
                 dismissButton = { TextButton(onClick = { pendingCallNumber = null }) { Text("Cancel") } },
             )
+        }
+        pendingWhatsAppDraft?.let { draft ->
+            AlertDialog(
+                onDismissRequest = { pendingWhatsAppDraft = null },
+                title = { Text("Review WhatsApp message") },
+                text = { Text("Open WhatsApp with this draft for ${draft.contact}? You will choose the conversation and press Send in WhatsApp.\n\n${draft.message}") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        pendingWhatsAppDraft = null
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, draft.message)
+                            setPackage("com.whatsapp")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        runCatching {
+                            context.startActivity(Intent.createChooser(shareIntent, "Choose WhatsApp conversation"))
+                            showResult("WhatsApp message draft for ${draft.contact}", "Opened the WhatsApp draft. Select ${draft.contact} and tap Send to send the message.")
+                        }.onFailure {
+                            notice = "WhatsApp could not open the message draft. No message was sent."
+                        }
+                    }) { Text("Open draft") }
+                },
+                dismissButton = { TextButton(onClick = { pendingWhatsAppDraft = null }) { Text("Cancel") } },
+            )
+        }
+        }
+    }
+}
+
+@Composable
+private fun IntroScreen() {
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        Text(
+            "ZERO-Assist",
+            Modifier.align(Alignment.Center),
+            color = Color.White,
+            fontSize = 36.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        Column(
+            Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("version (17.7.07)", color = Color.White, style = MaterialTheme.typography.bodyMedium)
+            Text("Made by Love @Shree❤️", color = Color.White, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -890,6 +1084,8 @@ private fun SettingsScreen(
     onTestSpeech: (SpeechLanguage) -> Unit,
     onStopSpeech: () -> Unit,
     wakeWordEnabled: Boolean,
+    wakeWordActive: Boolean,
+    wakeWordError: String?,
     wakeWordPhrase: String,
     onWakeWordPhrase: (String) -> Unit,
     onWakeWordEnabled: (Boolean) -> Unit,
@@ -900,7 +1096,7 @@ private fun SettingsScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Preferences", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-        val speechOutputReady = speechOutputStatus is SpeechOutputStatus.Ready
+        val speechOutputReady = speechOutputStatus is SpeechOutputStatus.Ready || speechOutputStatus is SpeechOutputStatus.ReadyWithVoice
         val speechEngineReady = speechOutputReady || speechOutputStatus is SpeechOutputStatus.LanguageUnavailable
         SettingSwitch("Speak responses", speechOutputStatusMessage(speechOutputStatus), speechOutput, onSpeechOutput, enabled = speechOutputReady)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -914,7 +1110,7 @@ private fun SettingsScreen(
             else "The included Hindi model is being installed or no model is ready yet. Typed commands always remain available.",
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
-        TextButton(onClick = { onNavigate(Page.SpeechModels) }) { Text("Speech Models") }
+        TextButton(onClick = { onNavigate(Page.SpeechModels) }) { Text("Voice Library") }
         TextButton(onClick = { onNavigate(Page.Planner) }) { Text("Daily Planner") }
         TextButton(onClick = { onNavigate(Page.BatteryAlerts) }) { Text("Battery Alerts") }
         TextButton(onClick = { onNavigate(Page.Notes) }) { Text("Notes") }
@@ -926,11 +1122,16 @@ private fun SettingsScreen(
             FilterChip(selected = speechLanguageTag == "hi-IN", onClick = { onSpeechLanguage("hi-IN") }, label = { Text("Hindi") })
         }
         Text("Offline voice output", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-        Text("To install a local Hindi or English voice, open Android Settings, search for “Text-to-speech output,” choose the preferred engine, and install its voice data. ZERO only selects voices that report they do not require a network connection.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        Text("Use Voice Library to browse the offline voices installed by Android's speech engine, select one, or open its voice-data installer. ZERO only selects voices that report they do not require a network connection.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
         Text("Wake word", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
         SettingSwitch(
-            "Foreground wake listening",
-            if (wakeWordEnabled) "Listening only while ZERO is open. Turn off anytime." else "Off by default. Enable to listen while ZERO is open.",
+            "Background wake listening",
+            when {
+                wakeWordActive -> "Microphone is active in the background. Use the persistent notification to stop."
+                wakeWordError != null -> wakeWordError
+                wakeWordEnabled -> "Enabled; waiting for microphone access or a visible app launch to resume."
+                else -> "Off by default. A persistent notification stays visible while listening."
+            },
             wakeWordEnabled,
             onWakeWordEnabled,
         )
@@ -942,7 +1143,8 @@ private fun SettingsScreen(
             singleLine = true,
         )
         TextButton(onClick = { onWakeWordPhrase(WakeWord.DEFAULT_PHRASE) }) { Text("Use default: ${WakeWord.DEFAULT_PHRASE}") }
-        Text("Say the phrase followed by a command, for example: Hey ZERO, open YouTube. This uses the selected offline speech model and Android microphone permission; it never listens in the background.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        Text("Say the phrase followed by a command, for example: Hey ZERO, open YouTube. This uses the selected offline speech model and Android microphone permission. Continuous software listening can increase battery use; turn it off in Settings or use Stop in its persistent notification when you do not need it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        Text("ZERO-Assist version 17.7.07", style = MaterialTheme.typography.labelMedium)
         TextButton(onClick = { onNavigate(Page.Privacy) }) { Text("Privacy policy") }
         TextButton(onClick = { onNavigate(Page.Terms) }) { Text("Terms") }
     }
@@ -951,8 +1153,9 @@ private fun SettingsScreen(
 private fun speechOutputStatusMessage(status: SpeechOutputStatus): String = when (status) {
     SpeechOutputStatus.Initializing -> "Initializing the Android speech engine…"
     is SpeechOutputStatus.Ready -> "Using an installed offline ${status.language.label} voice."
+    is SpeechOutputStatus.ReadyWithVoice -> "Using installed offline ${status.voice.displayName} (${status.voice.languageTag})."
     is SpeechOutputStatus.LanguageUnavailable ->
-        "No offline ${status.language.label} voice is installed. Open Android Settings > Text-to-speech output and install its voice data."
+        "No offline ${status.language.label} voice is installed. Open Voice Library to install voice data from Android's speech engine."
     SpeechOutputStatus.InitializationFailed -> "Android text-to-speech could not initialize. Check the installed TTS engine in Android Settings."
     SpeechOutputStatus.SpeakFailed -> "The local TTS engine could not speak. Check its installed voice data in Android Settings."
     SpeechOutputStatus.Closed -> "Speech output is stopped."
@@ -994,6 +1197,8 @@ private fun executeCommand(
         is AssistantCommand.OpenApp -> openApp(context, command.app)
         is AssistantCommand.SetFlashlight -> setFlashlight(context, command.enabled)
         is AssistantCommand.CallNumber -> callNumber(context, command.number, allowDirectCall)
+        is AssistantCommand.SearchYouTube -> openYouTubeSearch(context, command.query)
+        is AssistantCommand.DraftWhatsAppMessage -> "Review and confirm the WhatsApp message before opening its draft."
         is AssistantCommand.SaveNote -> "I couldn't save that note. Try again in Notes."
         is AssistantCommand.DraftReminder -> "Open the planner to choose a date and time for that reminder."
         is AssistantCommand.RunShortcut -> "I couldn't find an enabled shortcut named ${command.name}."
@@ -1008,6 +1213,23 @@ private fun executeCommand(
     history.add(input, response)
     if (speechOutput) speak(response)
     if (response.startsWith("I couldn't") || response.startsWith("That app") || response.startsWith("This device")) onError(response)
+}
+
+private fun openYouTubeSearch(context: Context, query: String): String {
+    val uri = Uri.parse("https://www.youtube.com/results").buildUpon()
+        .appendQueryParameter("search_query", query)
+        .build()
+    val youtube = Intent(Intent.ACTION_VIEW, uri).setPackage("com.google.android.youtube")
+    val intent = if (youtube.resolveActivity(context.packageManager) != null) youtube else Intent(Intent.ACTION_VIEW, uri)
+    return try {
+        if (intent.resolveActivity(context.packageManager) == null) return "No app is available to open YouTube search."
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        "Opened YouTube search for $query."
+    } catch (_: ActivityNotFoundException) {
+        "No app is available to open YouTube search."
+    } catch (_: SecurityException) {
+        "Android denied the YouTube search request."
+    }
 }
 
 private fun batteryStatus(context: Context): String {

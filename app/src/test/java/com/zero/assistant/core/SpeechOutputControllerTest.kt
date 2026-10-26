@@ -9,12 +9,14 @@ class SpeechOutputControllerTest {
         var initializationSucceeds: Boolean = true,
         var availableLanguages: Set<String> = setOf("en-US", "hi-IN"),
         var speakingSucceeds: Boolean = true,
+        val availableVoices: List<OfflineTtsVoice> = emptyList(),
     ) : SpeechOutputEngine {
         var initializationCallback: ((Boolean) -> Unit)? = null
         val selectedLanguages = mutableListOf<String>()
         val spoken = mutableListOf<String>()
         var stopped = false
         var shutDown = false
+        var selectedVoiceId: String? = null
 
         override fun initialize(onInitialized: (Boolean) -> Unit) {
             initializationCallback = onInitialized
@@ -23,6 +25,14 @@ class SpeechOutputControllerTest {
         override fun selectOfflineVoice(languageTag: String): Boolean {
             selectedLanguages.add(languageTag)
             return languageTag in availableLanguages
+        }
+
+        override fun availableOfflineVoices(): List<OfflineTtsVoice> = availableVoices
+
+        override fun selectVoice(voiceId: String): Boolean {
+            if (availableVoices.none { it.id == voiceId }) return false
+            selectedVoiceId = voiceId
+            return true
         }
 
         override fun speak(text: String): Boolean {
@@ -108,5 +118,21 @@ class SpeechOutputControllerTest {
         controller.speak("This will fail.")
 
         assertEquals(SpeechOutputStatus.SpeakFailed, controller.status)
+    }
+
+    @Test
+    fun selectsAndUsesAnInstalledOfflineVoice() {
+        val voice = OfflineTtsVoice("en-gb-local", "English UK", "en-GB", "English (United Kingdom)", 400)
+        val engine = FakeEngine(availableVoices = listOf(voice))
+        val controller = SpeechOutputController(engine) {}
+        controller.initialize()
+        engine.finishInitialization()
+
+        assertTrue(controller.selectVoice(voice.id))
+        controller.speak("Hello")
+
+        assertEquals(voice.id, engine.selectedVoiceId)
+        assertEquals(SpeechOutputStatus.ReadyWithVoice(voice), controller.status)
+        assertEquals(listOf("Hello"), engine.spoken)
     }
 }
