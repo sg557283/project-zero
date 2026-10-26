@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "vosk-hi-small-0.22",
+      "language": "hi-IN",
+      "languageName": "Hindi",
+      "name": "Vosk Hindi Small",
+      "version": "0.22",
+      "archiveSizeBytes": 44458845,
+      "maxExtractedBytes": 120000000,
+      "sha256": "7c50a10866889f0ac21d912c20537a055a597ed09fc1d3e5bcd798f9f0017e48",
+      "archiveRoot": "vosk-model-small-hi-0.22",
+      "sourceUrl": "https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip",
+      "license": "Apache-2.0",
+      "bundledAsset": "models/vosk-model-small-hi-0.22.zip"
+    },
+    {
+      "id": "vosk-en-us-small-0.15",
+      "language": "en-US",
+      "languageName": "English (US)",
+      "name": "Vosk English US Small",
+      "version": "0.15",
+      "archiveSizeBytes": 41205931,
+      "maxExtractedBytes": 120000000,
+      "sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
+      "archiveRoot": "vosk-model-small-en-us-0.15",
+      "sourceUrl": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+      "license": "Apache-2.0",
+      "bundledAsset": null
+    }
+  ]
+}

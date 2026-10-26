@@ -1,54 +1,51 @@
 # ZERO
 
-ZERO is a native Android personal assistant built with Kotlin and Jetpack Compose. Typed commands, command parsing, app launching, flashlight controls, the system clock, and command history run locally. ZERO has no account, server, API key, analytics, ads, or internet permission.
+ZERO is a native Android personal assistant built with Kotlin, Jetpack Compose, and Material 3. Its launcher branding is a black-and-white ZERO wordmark; Android notifications use a separate monochrome icon. Typed commands, command parsing, app launching, flashlight control, local time, battery status, call intents, command history, notes, reminders, battery alerts, and shortcuts run on-device. ZERO has no account, cloud AI, analytics, or ads.
 
-## Offline features
+## Offline speech
 
-- Open YouTube, WhatsApp, Camera, and Android Settings when installed. Opening YouTube or WhatsApp does not make their own content available offline.
-- Turn the flashlight on or off on supported devices after camera permission is granted.
-- Tell the current local time, answer help requests, and report unsupported commands.
-- Parse English, common Hinglish, and supported Hindi-script commands.
-- Keep up to 50 recent commands in app-private local storage. Clear history in the History screen.
-- Use push-to-talk with Android's explicit on-device speech recognizer on Android 12/API 31+ when the device provides it. English and Hindi can be selected in Settings. Voice recognition also requires the matching offline model to be installed by the device speech service; ZERO does not download one or fall back to a network recognizer.
-- Speak responses with an installed Android text-to-speech voice only when that voice reports it does not require a network connection.
+ZERO uses Vosk Android for push-to-talk recognition. The Hindi small model `vosk-model-small-hi-0.22` is bundled in the APK and installed into app-private storage on first launch. The English US small model `vosk-model-small-en-us-0.15` is available from Speech Models; after its one-time download and installation, recognition runs locally without a network connection. The model catalog is versioned in `app/src/main/assets/speech-models.json`; downloads use fixed HTTPS URLs, byte lengths, and SHA-256 checksums. ZIP paths, extraction size, required Vosk files, and native Vosk loading are checked before a model can be marked installed. Active recognition stays on the previous model until the replacement validates.
 
-Voice input and output are therefore offline-capable, but their availability depends on the phone, Android speech/TTS providers, installed language data, and device locale. ZERO does not record raw audio. Microphone use starts only after the user taps Mic and is stopped when ZERO leaves the foreground. “Hey ZERO” is not implemented; there is no always-on microphone service, wake-word engine, or wake-word model.
+| Model | Language | Version | Archive size | Source and license |
+| --- | --- | --- | ---: | --- |
+| `vosk-model-small-hi-0.22` | Hindi | 0.22 | 44,458,845 bytes | [Official archive](https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip), Apache-2.0 per the [Vosk model catalog](https://alphacephei.com/vosk/models) |
+| `vosk-model-small-en-us-0.15` | English (US) | 0.15 | 41,205,931 bytes | [Official archive](https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip), Apache-2.0 per the Vosk model catalog |
 
-## Speech engine and model evaluation
+The bundled Hindi archive adds 44,458,845 bytes (about 42.4 MiB) before APK packaging; the downloaded English model is not included in the APK. Model archive checksums are stored in the catalog. The Vosk Android runtime is `com.alphacephei:vosk-android:0.3.75`, Apache-2.0. Attribution and the full license text are included in app assets under `third-party/`.
 
-| Need | Decision | Offline behavior, model, and licensing |
-| --- | --- | --- |
-| STT | Android `SpeechRecognizer.createOnDeviceSpeechRecognizer` (API 31+) with a runtime on-device availability check; no third-party STT dependency | Uses the device's on-device recognizer, not the general recognizer API. ZERO bundles no model and adds no APK model bytes. The Android/provider-managed English or Hindi language model must already be installed; provider-specific model name, license, download size, and RAM use are not exposed by Android's app API and vary by device. Language-unavailable errors direct users to Android Settings. [Android API reference](https://developer.android.com/reference/android/speech/SpeechRecognizer#createOnDeviceSpeechRecognizer(android.content.Context)) |
-| TTS | Android `TextToSpeech`; ZERO selects an installed local English or Hindi voice | No app-bundled voice or model. A voice with `isNetworkConnectionRequired == false` is required. Install voice data through Android Settings > Text-to-speech output. The voice engine and voice-data license/size are provider-specific. [Android API reference](https://developer.android.com/reference/android/speech/tts/TextToSpeech) |
-| Wake word | Not integrated; push-to-talk instead | `openWakeWord` has Apache-2.0 library code, but its documented integration is Python/ONNX/TFLite-oriented rather than a ready-to-use Android SDK; a suitable “Hey ZERO” model and its separate license would also need verification. No model is bundled. Always-listening would additionally require a microphone foreground service and version-specific permissions. [Project](https://github.com/dscripka/openWakeWord) |
+Speech models are separate from Android Text-to-Speech voices. ZERO initializes Android TTS before speaking and selects only a local voice that reports no network requirement. If a local Hindi or English voice is missing, install it in Android Settings > Text-to-speech output. Settings contains English/Hindi test buttons and a stop control. Voice availability depends on the device's installed local TTS engine and voice data.
 
-Alternatives considered:
+Wake listening is off by default. In Settings, users can enable foreground-only wake listening and edit the phrase; the default is “Hey ZERO.” Enabling it requests `RECORD_AUDIO`. While ZERO remains visible, the selected offline Vosk model listens for the phrase and can handle a command that follows it. Capture stops when ZERO leaves the foreground or wake listening is turned off. Push-to-talk remains available, and ZERO does not save raw audio. Hindi and English recognition use the selected model. Hinglish is not advertised as a supported automatic recognition mode.
 
-- [Vosk](https://github.com/alphacep/vosk-api) provides offline Android-compatible STT. Its small English US model is about 40 MB and its Hindi model about 42 MB; the model list labels both Apache-2.0 and describes small models as suitable for mobile (about 300 MB runtime memory). It was not integrated to avoid adding engine/native-library size plus roughly 82 MB of model assets or introducing a separate model download/setup flow. [Models and licenses](https://alphacephei.com/vosk/models)
-- [whisper.cpp](https://github.com/ggml-org/whisper.cpp) supports Android and is MIT-licensed. Its multilingual tiny model is 75 MiB (about 273 MB runtime memory); base is 142 MiB (about 388 MB). It is capable but requires NDK/native integration and a large model file for this small command set, so it was not included. [Models and sizes](https://github.com/ggml-org/whisper.cpp/blob/master/models/README.md)
+## Commands and permissions
 
-The only speech models used by ZERO are those managed by the phone's installed Android providers. ZERO downloads no model at runtime and includes no STT, TTS, or wake-word model files.
+- Open YouTube, WhatsApp, Camera, and Android Settings when installed.
+- Use the home dashboard for local time/date, battery level, the next reminder, microphone status, and quick actions for apps, flashlight, battery, Wi-Fi, Bluetooth, and the dialer. Wi-Fi and Bluetooth actions open Android Settings for user-controlled changes; calls still require confirmation or dialer review.
+- Turn the flashlight on/off on supported hardware after runtime camera permission.
+- Tell local time and battery status, show help, and maintain up to 50 local command-history entries.
+- Save notes with `note <text>`, open the planner with `reminders`, `tasks`, or `planner`, and create a reminder draft with `remind me to <title>`. Spoken text is shown for review; date/time/repeat are set in the planner form.
+- Run an enabled saved shortcut by its exact name or `run <shortcut name>`. Shortcut actions are limited to native app/Settings intents, planner/notes views, battery status, flashlight control, and local speech.
+- Request a call to a parsed phone number. ZERO displays and confirms the target first, requests runtime `CALL_PHONE` only after confirmation, and opens the dialer for review if permission or direct calling is unavailable.
+- Keep typed commands available offline regardless of speech model or voice availability.
 
-## Permissions
+Reminders are stored locally and scheduled with WorkManager. Scheduling is inexact; Android can delay delivery. Reminder and battery notifications use a minimal ZERO-branded local style. Notification permission is requested when needed. WorkManager reschedules across reboot, and ZERO recalculates reminders after time/time-zone changes. No exact-alarm permission is requested. Battery alerts support a 1-100% threshold and alert once per above-to-at/below crossing; they re-arm after recovery. Background checks are periodic (15 minutes minimum) and can be delayed or stopped by Android force-stop/power management. Charging-start and full alerts are optional.
 
-- `RECORD_AUDIO`: requested at runtime only after the user taps Mic, for push-to-talk.
-- `CAMERA`: requested at runtime only for flashlight control, which uses `CameraManager.setTorchMode`; camera hardware is optional.
+Runtime permissions are `RECORD_AUDIO` for push-to-talk and explicitly enabled foreground wake listening, `CAMERA` for flashlight control, `CALL_PHONE` only for confirmed direct calling, `POST_NOTIFICATIONS` for alerts, and `RECEIVE_BOOT_COMPLETED` for reminder rescheduling. Internet permission is used only to download the fixed catalog's model archive; it is not needed for commands, recognition after installation, local model activation, TTS, notes, or shortcuts. Models and user data stay in app-private storage.
 
-No internet, location, contacts, SMS, accessibility, device-admin, foreground-service, or notification permission is needed. A foreground service is not used because ZERO has no background or wake-word listening.
+## Build
 
-## Build and install
-
-Requirements: JDK 17 or 21, Android SDK platform 36, Android Gradle Plugin 8.13.2, Kotlin 2.2.21, and the included Gradle 8.13 wrapper. Use JDK 17 or 21; the Kotlin compiler in this project does not accept the current JDK 25 version string.
+Requirements: JDK 17 or 21, Android SDK platform 36, Android Gradle Plugin 8.13.2, Kotlin 2.2.21, and the included Gradle 8.13 wrapper.
 
 ```sh
 ./gradlew testDebugUnitTest
 ./gradlew assembleDebug
+./gradlew packageDebugZip
 ```
 
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Install it with `adb install -r app/build/outputs/apk/debug/app-debug.apk`, or transfer it to the phone and open it (allow installation from that source if Android asks).
+The normal debug APK remains at `app/build/outputs/apk/debug/app-debug.apk`. `packageDebugZip` stages `app/build/downloadable/Zero-Assistant.apk` and creates `app/build/downloadable/Zero-Assistant.zip`, whose only root entry is `Zero-Assistant.apk`. It verifies APK/ZIP integrity and required Android archive entries. GitHub Actions uploads one artifact named `Zero-Assistant.zip`: open the repository's **Actions** page, select **Build ZERO Android APK**, open a successful run, and download the artifact in its **Artifacts** section. Install the APK with `adb install -r Zero-Assistant.apk`.
 
-On the phone, grant microphone access when first using Mic. In ZERO Settings, select English or Hindi. If recognition reports that a language is unavailable, use Android Settings search for “offline speech recognition” or “speech services” and install that language's offline speech data. To enable spoken responses, use Android Settings search for “Text-to-speech output,” install an English or Hindi voice for the preferred engine, and return to ZERO. Both speech features can be unavailable on devices without a compatible local provider/model; typed commands remain fully offline.
+Unit tests cover command parsing/history, TTS initialization and language failures, catalog validation, model transfer state, bundled installation, checksum and path-traversal rejection, cancellation, Vosk validation gates, active-model persistence, recognition error states, planner recurrence/persistence, battery crossing/re-arming, and note/shortcut persistence/action validation. They do not replace physical-device verification of microphone capture, on-device TTS voices, real speech accuracy, WorkManager delivery timing, or battery broadcasts.
 
-## Privacy
+## Privacy and terms
 
-Command history is held in app-private preferences and can be cleared in the app. ZERO does not save raw audio or send commands to a ZERO server. The explicit on-device Android recognizer is used only for a user-initiated recording; speech and TTS providers and their separately managed language assets are external system components, so their behavior and data licensing are controlled by the device/provider.
+Typed commands, command execution, history, notes, reminders, shortcuts, battery evaluation, and model inference are processed on-device. Network use is limited to the fixed HTTPS speech-model downloads in the catalog. ZERO does not upload commands, audio, notes, reminders, or history, and has no accounts, cloud AI, analytics, or ads. Local history, notes, reminders, shortcuts, alert settings, and installed models use app-private storage. Audio is not retained. Phone calls are external actions: ZERO displays and confirms the intended number before requesting permission or opening the dialer. Reminder and battery notification delivery depends on Android notification permission, scheduling, power management, and whether ZERO has been force-stopped. Calls, app availability, flashlight hardware, speech recognition quality, and installed Android TTS voices depend on the device and user confirmation.

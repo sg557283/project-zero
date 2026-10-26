@@ -34,12 +34,12 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Run tests, lint, and build APK
-        run: ./gradlew testDebugUnitTest lintDebug assembleDebug
+      - name: Run tests, lint, and package debug ZIP
+        run: ./gradlew testDebugUnitTest lintDebug packageDebugZip
 
-      - name: Upload debug APK
+      - name: Upload Zero-Assistant.zip
         uses: actions/upload-artifact@v4
         with:
-          name: ZERO-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Zero-Assistant.zip
+          path: app/build/downloadable/Zero-Assistant.zip
           if-no-files-found: error

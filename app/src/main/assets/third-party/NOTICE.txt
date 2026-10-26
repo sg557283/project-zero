@@ -1,0 +1,24 @@
+ZERO includes and uses speech-recognition components from Alpha Cephei.
+
+Vosk Android runtime
+Copyright 2019 Alpha Cephei Inc.
+License: Apache License 2.0
+Source: https://github.com/alphacep/vosk-api
+
+Java Native Access (JNA)
+JNA 5.18.1 is dual-licensed under Apache-2.0 OR LGPL-2.1-or-later. ZERO uses
+the Apache-2.0 option. Source: https://github.com/java-native-access/jna
+
+Vosk Hindi small model
+Model: vosk-model-small-hi-0.22
+Source: https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip
+Catalog license: Apache License 2.0
+
+Vosk English US small model (downloaded only when selected)
+Model: vosk-model-small-en-us-0.15
+Copyright 2020 Alpha Cephei Inc.
+Source: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+Catalog license: Apache License 2.0
+
+The model archive checksums and curated metadata are in speech-models.json.
+The full Apache License 2.0 text is in third-party/Apache-2.0.txt.

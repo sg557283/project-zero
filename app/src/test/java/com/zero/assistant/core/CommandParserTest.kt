@@ -35,6 +35,25 @@ class CommandParserTest {
         assertEquals(AssistantCommand.TellTime, CommandParser.parse("Abhi kitne baje hain?"))
     }
 
+    @Test fun parsesBatteryStatusInEnglishAndHindi() {
+        assertEquals(AssistantCommand.BatteryStatus, CommandParser.parse("battery status"))
+        assertEquals(AssistantCommand.BatteryStatus, CommandParser.parse("बैटरी कितनी है"))
+    }
+
+    @Test fun parsesConfirmedCallTargetsButRejectsShortNumbers() {
+        assertEquals(AssistantCommand.CallNumber("+15551234567"), CommandParser.parse("call +1 (555) 123-4567"))
+        assertEquals(AssistantCommand.CallNumber("1234567890"), CommandParser.parse("dial 123 456 7890"))
+        assertEquals(AssistantCommand.Unsupported, CommandParser.parse("call 911"))
+    }
+
+    @Test fun parsesLocalNotesPlannerAndShortcutCommands() {
+        assertEquals(AssistantCommand.SaveNote("buy milk"), CommandParser.parse("note buy milk"))
+        assertEquals(AssistantCommand.DraftReminder("call Sam"), CommandParser.parse("remind me to call Sam"))
+        assertEquals(AssistantCommand.ShowPlanner, CommandParser.parse("show today's tasks"))
+        assertEquals(AssistantCommand.ShowNotes, CommandParser.parse("show notes"))
+        assertEquals(AssistantCommand.RunShortcut("morning routine"), CommandParser.parse("run Morning Routine"))
+    }
+
     @Test fun parsesHelpAndUnsupportedInput() {
         assertEquals(AssistantCommand.Help, CommandParser.parse("help"))
         assertEquals(AssistantCommand.Unsupported, CommandParser.parse(""))
