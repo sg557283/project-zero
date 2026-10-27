@@ -245,6 +245,9 @@ class WakeWordService : Service() {
 
     private fun updateNotification(message: String, command: String? = null) {
         if (!serviceRunning) return
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
         runCatching {
             NotificationManagerCompat.from(this).notify(WakeWordSettings.NOTIFICATION_ID, buildNotification(message, command))
         }
