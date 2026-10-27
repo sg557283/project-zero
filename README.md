@@ -15,6 +15,8 @@ The bundled Hindi archive adds 44,458,845 bytes (about 42.4 MiB) before APK pack
 
 Speech models are separate from Android Text-to-Speech voices. ZERO initializes Android TTS before speaking and selects only a local voice that reports no network requirement. If a local Hindi or English voice is missing, install it in Android Settings > Text-to-speech output. Settings contains English/Hindi test buttons and a stop control. Voice availability depends on the device's installed local TTS engine and voice data.
 
+Voice Library has exactly two voice categories: Simple and Emotion-Based. Simple lists installed local Android TTS voices. Emotion-Based remains unavailable unless an installed offline engine or model reports genuine emotion controls; ZERO does not label basic pitch, speed, or pause changes as model-supported emotions. Vosk STT models are listed separately as recognition models and are never presented as TTS voices.
+
 Wake listening is off by default. In Settings, users can enable foreground-only wake listening and edit the phrase; the default is “Hey ZERO.” Enabling it requests `RECORD_AUDIO`. While ZERO remains visible, the selected offline Vosk model listens for the phrase and can handle a command that follows it. Capture stops when ZERO leaves the foreground or wake listening is turned off. Push-to-talk remains available, and ZERO does not save raw audio. Hindi and English recognition use the selected model. Hinglish is not advertised as a supported automatic recognition mode.
 
 ## Commands and permissions

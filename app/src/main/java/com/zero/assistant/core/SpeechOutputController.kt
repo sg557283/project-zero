@@ -7,6 +7,11 @@ enum class SpeechLanguage(val tag: String, val label: String) {
     Hindi("hi-IN", "Hindi"),
 }
 
+enum class VoiceLibraryCategory(val label: String) {
+    Simple("Simple"),
+    EmotionBased("Emotion-Based"),
+}
+
 data class OfflineTtsVoice(
     val id: String,
     val displayName: String,

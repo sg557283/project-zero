@@ -19,6 +19,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -30,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.zero.assistant.core.ModelTransferState
 import com.zero.assistant.core.OfflineTtsVoice
+import com.zero.assistant.core.VoiceLibraryCategory
 import com.zero.assistant.data.SpeechModelManager
 import com.zero.assistant.core.SpeechModelSpec
 
@@ -44,43 +47,67 @@ internal fun SpeechModelsScreen(
 ) {
     val states by manager.states.collectAsState()
     val activeModelId by manager.activeModelId.collectAsState()
+    var selectedCategory by remember { mutableStateOf(VoiceLibraryCategory.Simple) }
     var confirmDownload by remember { mutableStateOf<SpeechModelSpec?>(null) }
     var confirmUninstall by remember { mutableStateOf<SpeechModelSpec?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
 
     Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Text("Speech models", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Text("Voice Library", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Text(
-            "Browse offline recognition models and installed offline speech voices. Voice packages are provided and installed by the Android speech engine.",
+            "Installed offline speech voices and local recognition models.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
         )
+        TabRow(selectedTabIndex = VoiceLibraryCategory.entries.indexOf(selectedCategory)) {
+            VoiceLibraryCategory.entries.forEach { category ->
+                Tab(
+                    selected = selectedCategory == category,
+                    onClick = { selectedCategory = category },
+                    text = { Text(category.label) },
+                )
+            }
+        }
         feedback?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
         Spacer(Modifier.height(12.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            item { Text("Text-to-speech voices", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Android voice packages", fontWeight = FontWeight.SemiBold)
-                        Text("${ttsVoices.size} installed offline ${if (ttsVoices.size == 1) "voice" else "voices"} available")
-                        Button(onClick = { feedback = onInstallTtsVoices() }) { Text("Browse / install voice data") }
+            when (selectedCategory) {
+                VoiceLibraryCategory.Simple -> {
+                    item { Text("Simple voices", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+                    item {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Android offline voice packages", fontWeight = FontWeight.SemiBold)
+                                Text("${ttsVoices.size} installed offline ${if (ttsVoices.size == 1) "voice" else "voices"} available")
+                                Button(onClick = { feedback = onInstallTtsVoices() }) { Text("Browse / install voice data") }
+                            }
+                        }
+                    }
+                    if (ttsVoices.isEmpty()) {
+                        item { Text("No installed offline voices are currently reported by the selected Android speech engine.") }
+                    }
+                    items(ttsVoices, key = { "tts:${it.id}" }) { voice ->
+                        TtsVoiceRow(
+                            voice = voice,
+                            selected = selectedTtsVoiceId == voice.id,
+                            onSelect = {
+                                feedback = if (onSelectTtsVoice(voice.id)) "Selected ${voice.displayName}." else "Android could not select that voice."
+                            },
+                        )
+                    }
+                }
+                VoiceLibraryCategory.EmotionBased -> {
+                    item { Text("Emotion-Based voices", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+                    item {
+                        Text(
+                            "No installed offline speech engine or model reports native emotion controls. ZERO does not present basic pitch, speed, or pause adjustments as model-supported emotions.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
             }
-            if (ttsVoices.isEmpty()) {
-                item { Text("No installed offline voices are currently reported by the selected Android speech engine.") }
-            }
-            items(ttsVoices, key = { "tts:${it.id}" }) { voice ->
-                TtsVoiceRow(
-                    voice = voice,
-                    selected = selectedTtsVoiceId == voice.id,
-                    onSelect = {
-                        feedback = if (onSelectTtsVoice(voice.id)) "Selected ${voice.displayName}." else "Android could not select that voice."
-                    },
-                )
-            }
             item { Text("Speech recognition models", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+            item { Text("These STT models recognize speech; they are not text-to-speech voices.", style = MaterialTheme.typography.bodySmall) }
             items(manager.catalog.models, key = { "model:${it.id}" }) { spec ->
                 val state = states[spec.id] ?: ModelTransferState.Idle
                 ModelRow(

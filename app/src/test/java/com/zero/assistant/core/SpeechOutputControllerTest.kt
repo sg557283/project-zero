@@ -52,6 +52,11 @@ class SpeechOutputControllerTest {
     }
 
     @Test
+    fun voiceLibraryHasExactlyTheTwoRequiredCategories() {
+        assertEquals(listOf("Simple", "Emotion-Based"), VoiceLibraryCategory.entries.map { it.label })
+    }
+
+    @Test
     fun waitsForInitializationBeforeSpeakingQueuedResults() {
         val engine = FakeEngine()
         val controller = SpeechOutputController(engine) {}
