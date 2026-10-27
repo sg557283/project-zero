@@ -9,6 +9,7 @@ class SpeechOutputControllerTest {
         var initializationSucceeds: Boolean = true,
         var availableLanguages: Set<String> = setOf("en-US", "hi-IN"),
         var speakingSucceeds: Boolean = true,
+        var completesSpeechImmediately: Boolean = true,
         val availableVoices: List<OfflineTtsVoice> = emptyList(),
     ) : SpeechOutputEngine {
         var initializationCallback: ((Boolean) -> Unit)? = null
@@ -17,6 +18,7 @@ class SpeechOutputControllerTest {
         var stopped = false
         var shutDown = false
         var selectedVoiceId: String? = null
+        var speechCompleteListener: (() -> Unit)? = null
 
         override fun initialize(onInitialized: (Boolean) -> Unit) {
             initializationCallback = onInitialized
@@ -35,8 +37,15 @@ class SpeechOutputControllerTest {
             return true
         }
 
+        override fun setOnSpeechComplete(listener: () -> Unit) {
+            speechCompleteListener = listener
+        }
+
         override fun speak(text: String): Boolean {
-            if (speakingSucceeds) spoken.add(text)
+            if (speakingSucceeds) {
+                spoken.add(text)
+                if (completesSpeechImmediately) speechCompleteListener?.invoke()
+            }
             return speakingSucceeds
         }
 
@@ -123,6 +132,20 @@ class SpeechOutputControllerTest {
         controller.speak("This will fail.")
 
         assertEquals(SpeechOutputStatus.SpeakFailed, controller.status)
+    }
+
+    @Test
+    fun reportsSpeakingUntilTheLocalEngineCompletesTheUtterance() {
+        val engine = FakeEngine(completesSpeechImmediately = false)
+        val controller = SpeechOutputController(engine) {}
+        controller.initialize()
+        engine.finishInitialization()
+
+        controller.speak("I am here.")
+        assertEquals(SpeechOutputStatus.Speaking, controller.status)
+
+        engine.speechCompleteListener?.invoke()
+        assertEquals(SpeechOutputStatus.Ready(SpeechLanguage.English), controller.status)
     }
 
     @Test

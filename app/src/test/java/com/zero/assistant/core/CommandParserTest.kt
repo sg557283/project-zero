@@ -67,4 +67,15 @@ class CommandParserTest {
         assertEquals(AssistantCommand.Unsupported, CommandParser.parse(""))
         assertEquals(AssistantCommand.Unsupported, CommandParser.parse("write me a poem"))
     }
+
+    @Test fun recognizesEnglishHindiAndHinglishIdentityQuestionsOffline() {
+        assertEquals(AssistantCommand.Identity, CommandParser.parse("Who are you?"))
+        assertEquals(AssistantCommand.Identity, CommandParser.parse("Who is ZERO?"))
+        assertEquals(AssistantCommand.Identity, CommandParser.parse("Tum kaun ho?"))
+        assertEquals(AssistantCommand.Identity, CommandParser.parse("तुम कौन हो?"))
+        assertEquals(
+            "I am ZERO, your personal assistant to make your work and life balanced and easy. I am a test product of Shree.",
+            AssistantIdentity.RESPONSE,
+        )
+    }
 }

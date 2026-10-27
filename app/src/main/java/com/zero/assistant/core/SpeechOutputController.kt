@@ -27,6 +27,7 @@ sealed interface SpeechOutputStatus {
     data class LanguageUnavailable(val language: SpeechLanguage) : SpeechOutputStatus
     data object InitializationFailed : SpeechOutputStatus
     data object SpeakFailed : SpeechOutputStatus
+    data object Speaking : SpeechOutputStatus
     data object Closed : SpeechOutputStatus
 }
 
@@ -35,6 +36,7 @@ interface SpeechOutputEngine {
     fun selectOfflineVoice(languageTag: String): Boolean
     fun availableOfflineVoices(): List<OfflineTtsVoice> = emptyList()
     fun selectVoice(voiceId: String): Boolean = false
+    fun setOnSpeechComplete(listener: () -> Unit) = Unit
     fun speak(text: String): Boolean
     fun stop()
     fun shutdown()
@@ -48,12 +50,18 @@ class SpeechOutputController(
     private var initialized = false
     private var closed = false
     private var language = SpeechLanguage.English
+    private var readyStatus: SpeechOutputStatus = SpeechOutputStatus.Ready(language)
 
     var status: SpeechOutputStatus = SpeechOutputStatus.Initializing
         private set
 
     fun initialize() {
-        if (!closed && !initialized) engine.initialize(::onInitialized)
+        if (!closed && !initialized) {
+            engine.setOnSpeechComplete {
+                if (!closed && status == SpeechOutputStatus.Speaking) updateStatus(readyStatus)
+            }
+            engine.initialize(::onInitialized)
+        }
     }
 
     fun setLanguage(language: SpeechLanguage) {
@@ -67,7 +75,8 @@ class SpeechOutputController(
         if (!initialized || closed) return false
         val voice = engine.availableOfflineVoices().firstOrNull { it.id == voiceId } ?: return false
         if (!engine.selectVoice(voiceId)) return false
-        updateStatus(SpeechOutputStatus.ReadyWithVoice(voice))
+        readyStatus = SpeechOutputStatus.ReadyWithVoice(voice)
+        updateStatus(readyStatus)
         return true
     }
 
@@ -96,7 +105,10 @@ class SpeechOutputController(
 
     fun stop() {
         pending.clear()
-        if (!closed) engine.stop()
+        if (!closed) {
+            engine.stop()
+            if (status == SpeechOutputStatus.Speaking) updateStatus(readyStatus)
+        }
     }
 
     fun close() {
@@ -126,7 +138,8 @@ class SpeechOutputController(
             updateStatus(SpeechOutputStatus.LanguageUnavailable(language))
             return
         }
-        updateStatus(SpeechOutputStatus.Ready(language))
+        readyStatus = SpeechOutputStatus.Ready(language)
+        updateStatus(readyStatus)
         while (pending.isNotEmpty() && status is SpeechOutputStatus.Ready && !closed) {
             speakWhenReady(pending.removeFirst())
         }
@@ -134,6 +147,7 @@ class SpeechOutputController(
 
     private fun speakWhenReady(text: String) {
         if (status !is SpeechOutputStatus.Ready && status !is SpeechOutputStatus.ReadyWithVoice) return
+        updateStatus(SpeechOutputStatus.Speaking)
         if (!engine.speak(text)) updateStatus(SpeechOutputStatus.SpeakFailed)
     }
 

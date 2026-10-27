@@ -1,6 +1,7 @@
 package com.zero.assistant.core
 
 sealed interface AssistantCommand {
+    data object Identity : AssistantCommand
     data class OpenApp(val app: AppTarget) : AssistantCommand
     data class SetFlashlight(val enabled: Boolean) : AssistantCommand
     data class CallNumber(val number: String) : AssistantCommand
@@ -24,6 +25,10 @@ enum class AppTarget {
     Settings,
 }
 
+object AssistantIdentity {
+    const val RESPONSE = "I am ZERO, your personal assistant to make your work and life balanced and easy. I am a test product of Shree."
+}
+
 object CommandParser {
     private val callPattern = Regex("^\\s*(?:call|dial|phone|कॉल)\\s+(\\+?[\\d\\s().-]{7,24})\\s*$", RegexOption.IGNORE_CASE)
     private val youtubeSearchPattern = Regex("^\\s*(?:open\\s+)?youtube\\s+and\\s+search\\s+for\\s+(.{1,160})\\s*$", RegexOption.IGNORE_CASE)
@@ -33,8 +38,17 @@ object CommandParser {
     private val timePhrases = listOf("time", "kitne baje", "samay", "waqt", "कितने बजे", "समय क्या")
     private val batteryPhrases = listOf("battery", "charge", "बैटरी", "चार्ज")
     private val helpPhrases = listOf("help", "what can you do", "commands", "madad", "मदद", "सहायता")
+    private val identityPhrases = listOf(
+        "who are you", "who is zero", "who is zero assistant", "tum kaun ho", "tum kon ho",
+        "aap kaun ho", "aap kon ho", "zero kaun hai", "zero kon hai", "tum kaun ho zero",
+        "तुम कौन हो", "आप कौन हैं", "जीरो कौन है", "जीरो कौन हो", "तुम कौन हो जीरो",
+    )
 
     fun parse(input: String): AssistantCommand {
+        val normalized = input.trim().lowercase()
+            .replace(Regex("[^\\p{L}\\p{M}\\p{N}\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+        if (identityPhrases.any { normalized == it || normalized.contains(it) }) return AssistantCommand.Identity
         youtubeSearchPattern.matchEntire(input)?.groupValues?.get(1)?.trim()?.let { query ->
             if (query.isNotBlank()) return AssistantCommand.SearchYouTube(query)
         }

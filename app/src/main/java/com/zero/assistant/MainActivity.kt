@@ -1,7 +1,6 @@
 package com.zero.assistant
 
 import android.Manifest
-import android.os.Build
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -9,7 +8,10 @@ import android.content.pm.PackageManager
 import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraManager
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.content.IntentFilter
 import android.provider.MediaStore
@@ -17,9 +19,17 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +38,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -67,6 +78,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -77,11 +90,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.zero.assistant.core.AppTarget
 import com.zero.assistant.core.AssistantCommand
+import com.zero.assistant.core.AssistantResponseRoute
+import com.zero.assistant.core.AssistantResponseRouter
 import com.zero.assistant.core.BatteryAlertSettings
 import com.zero.assistant.core.LocalNote
 import com.zero.assistant.core.NoteRepository
@@ -90,7 +106,10 @@ import com.zero.assistant.core.ShortcutRepository
 import com.zero.assistant.core.UserShortcut
 import com.zero.assistant.core.CommandHistory
 import com.zero.assistant.core.CommandParser
+import com.zero.assistant.core.AssistantIdentity
 import com.zero.assistant.core.HistoryEntry
+import com.zero.assistant.core.HomeSuggestion
+import com.zero.assistant.core.HomeSuggestionCatalog
 import com.zero.assistant.core.OfflineRecognitionState
 import com.zero.assistant.core.OfflineRecognitionStateMachine
 import com.zero.assistant.core.PlannerReminder
@@ -100,6 +119,8 @@ import com.zero.assistant.core.SpeechOutputEngine
 import com.zero.assistant.core.SpeechOutputStatus
 import com.zero.assistant.core.OfflineTtsVoice
 import com.zero.assistant.core.WakeWord
+import com.zero.assistant.core.WakePhrase
+import com.zero.assistant.core.WakePhraseConfiguration
 import com.zero.assistant.data.PreferencesHistoryStorage
 import com.zero.assistant.data.BatteryAlertManager
 import com.zero.assistant.data.BatteryStatus
@@ -109,12 +130,20 @@ import com.zero.assistant.data.ReminderScheduler
 import com.zero.assistant.data.SpeechModelManager
 import com.zero.assistant.data.WakeWordService
 import com.zero.assistant.data.WakeWordSettings
+import com.zero.assistant.data.AiProviderSettings
+import com.zero.assistant.data.OpenAiCompatibleProvider
+import com.zero.assistant.data.AssistantAiProvider
 import com.zero.assistant.core.ReminderRepository
 import java.text.DateFormat
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.sin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
@@ -197,6 +226,9 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         pendingVoiceCommand.value = intent.getStringExtra(WakeWordSettings.EXTRA_COMMAND)
+        if (intent.getBooleanExtra(WakeWordSettings.EXTRA_RESUME, false) && WakeWordSettings.enabled(this)) {
+            startWakeWordService()
+        }
     }
 
     private fun startOfflineRecognition(
@@ -353,6 +385,7 @@ private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
     private val appContext = context.applicationContext
     private var textToSpeech: TextToSpeech? = null
     private var initializedCallback: ((Boolean) -> Unit)? = null
+    private var speechCompleteListener: (() -> Unit)? = null
 
     override fun initialize(onInitialized: (Boolean) -> Unit) {
         initializedCallback = onInitialized
@@ -360,6 +393,17 @@ private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
             textToSpeech = TextToSpeech(appContext) { result ->
                 val callback = initializedCallback
                 initializedCallback = null
+                if (result == TextToSpeech.SUCCESS) {
+                    textToSpeech?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
+                        override fun onStart(utteranceId: String?) = Unit
+                        override fun onDone(utteranceId: String?) { speechCompleteListener?.invoke() }
+                        @Suppress("OVERRIDE_DEPRECATION")
+                        override fun onError(utteranceId: String?) { speechCompleteListener?.invoke() }
+                        @Suppress("OVERRIDE_DEPRECATION")
+                        override fun onError(utteranceId: String?, errorCode: Int) { speechCompleteListener?.invoke() }
+                        override fun onStop(utteranceId: String?, interrupted: Boolean) { speechCompleteListener?.invoke() }
+                    })
+                }
                 callback?.invoke(result == TextToSpeech.SUCCESS)
             }
         } catch (_: Exception) {
@@ -402,6 +446,10 @@ private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
             engine.voice = voice
             true
         }.getOrDefault(false)
+    }
+
+    override fun setOnSpeechComplete(listener: () -> Unit) {
+        speechCompleteListener = listener
     }
 
     override fun speak(text: String): Boolean =
@@ -466,19 +514,36 @@ private fun ZeroApp(
     val productivityPreferences = remember { ProductivityPreferences(context.applicationContext) }
     val wakePreferences = remember { context.getSharedPreferences("zero_wake_word", Context.MODE_PRIVATE) }
     val ttsPreferences = remember { context.getSharedPreferences("zero_tts", Context.MODE_PRIVATE) }
+    val accessibilityPreferences = remember { context.getSharedPreferences("zero_accessibility", Context.MODE_PRIVATE) }
+    val aiProviderSettings = remember { AiProviderSettings(context) }
+    val aiRequestScope = rememberCoroutineScope()
     val noteRepository = remember { NoteRepository(productivityPreferences) }
     val shortcutRepository = remember { ShortcutRepository(productivityPreferences) }
     val activeModelId by modelManager.activeModelId.collectAsState()
     LaunchedEffect(reminderScheduler) { reminderScheduler.rescheduleAll() }
     var page by rememberSaveable { mutableStateOf(Page.Home) }
+    var backDestination by rememberSaveable { mutableStateOf(Page.Home) }
+    fun navigateTo(destination: Page) {
+        if (destination != page) {
+            backDestination = page
+            page = destination
+        }
+    }
+    fun navigateBack() {
+        page = backDestination
+        backDestination = Page.Home
+    }
+    BackHandler(enabled = page != Page.Home) { navigateBack() }
     var speechOutput by rememberSaveable { mutableStateOf(true) }
+        var reducedMotion by remember { mutableStateOf(accessibilityPreferences.getBoolean("reduced_motion", false)) }
     var speechLanguageTag by rememberSaveable {
         mutableStateOf(if (Locale.getDefault().language == "hi") "hi-IN" else "en-US")
     }
     var wakeWordEnabled by remember { mutableStateOf(WakeWordSettings.enabled(context)) }
     var wakeWordActive by remember { mutableStateOf(WakeWordSettings.active(context)) }
-    var wakeWordPhrase by remember { mutableStateOf(wakePreferences.getString("phrase", WakeWord.DEFAULT_PHRASE) ?: WakeWord.DEFAULT_PHRASE) }
+    var wakeWordPhrases by remember { mutableStateOf(WakeWordSettings.phrases(context)) }
     var wakeWordError by remember { mutableStateOf(WakeWordSettings.error(context)) }
+    var wakeWordLastDetection by remember { mutableLongStateOf(WakeWordSettings.lastDetection(context)) }
     var selectedTtsVoiceId by remember { mutableStateOf(ttsPreferences.getString("voice_id", null)) }
     var input by rememberSaveable { mutableStateOf("") }
     var isListening by remember { mutableStateOf(false) }
@@ -494,6 +559,10 @@ private fun ZeroApp(
         mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
     }
     var pendingWakeStart by remember { mutableStateOf(false) }
+    var pendingOnlineQuestion by remember { mutableStateOf<String?>(null) }
+    var pendingOnlineContinuation by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var onlineRequestRunning by remember { mutableStateOf(false) }
+    var onlineRequestJob by remember { mutableStateOf<Job?>(null) }
     val lines = rememberSaveable(saver = chatSaver) { mutableStateListOf(ChatLine(true, "Hi, I'm ZERO. What can I do for you?")) }
     lateinit var dispatchCommand: (String, (() -> Unit)?) -> Unit
 
@@ -503,10 +572,21 @@ private fun ZeroApp(
                 "enabled" -> wakeWordEnabled = WakeWordSettings.enabled(context)
                 "active" -> wakeWordActive = WakeWordSettings.active(context)
                 "error" -> wakeWordError = WakeWordSettings.error(context)
+                "last_detection" -> wakeWordLastDetection = WakeWordSettings.lastDetection(context)
+                "phrases_v2" -> wakeWordPhrases = WakeWordSettings.phrases(context)
             }
         }
         wakePreferences.registerOnSharedPreferenceChangeListener(listener)
         onDispose { wakePreferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
+    LaunchedEffect(wakeWordEnabled) {
+        while (wakeWordEnabled) {
+            delay(10_000)
+            wakeWordActive = WakeWordSettings.active(context)
+            wakeWordLastDetection = WakeWordSettings.lastDetection(context)
+            wakeWordError = WakeWordSettings.error(context)
+        }
     }
 
     fun startBackgroundListening() {
@@ -589,6 +669,31 @@ private fun ZeroApp(
         if (speechOutput) speak(response)
     }
 
+    fun answerOnlineQuestion(query: String) {
+        val config = aiProviderSettings.configuration()
+        val apiKey = aiProviderSettings.apiKey()
+        if (!config.enabled || apiKey.isNullOrBlank() || !hasValidatedInternet(context)) {
+            showResult(query, "Online AI is unavailable. ZERO can still handle supported offline commands, reminders, notes, battery status, and identity questions.")
+            return
+        }
+        onlineRequestRunning = true
+        onlineRequestJob = aiRequestScope.launch {
+            try {
+                val provider: AssistantAiProvider = OpenAiCompatibleProvider(config.endpoint, config.model, apiKey)
+                val response = provider.answer(query)
+                showResult(query, "Online AI: $response")
+            } catch (_: CancellationException) {
+                showResult(query, "Online request canceled. ZERO's offline commands remain available.")
+            } catch (failure: Exception) {
+                val reason = failure.message ?: "network or response error"
+                showResult(query, "Online AI failed ($reason). I don't have an offline language model for that question; supported local commands still work.")
+            } finally {
+                onlineRequestRunning = false
+                onlineRequestJob = null
+            }
+        }
+    }
+
     dispatchCommand = { command, onComplete ->
         when (val parsed = CommandParser.parse(command)) {
             is AssistantCommand.CallNumber -> pendingCallNumber = parsed.number
@@ -610,12 +715,13 @@ private fun ZeroApp(
                 .onFailure { showResult(command, it.message ?: "The note could not be saved."); onComplete?.invoke() }
             is AssistantCommand.DraftReminder -> {
                 plannerDraftTitle = parsed.title
-                page = Page.Planner
+                navigateTo(Page.Planner)
                 showResult(command, "Added the reminder title to the planner. Set its date and time to save it.")
                 onComplete?.invoke()
             }
-            AssistantCommand.ShowPlanner -> { page = Page.Planner; showResult(command, "Showing your planner."); onComplete?.invoke() }
-            AssistantCommand.ShowNotes -> { page = Page.Notes; showResult(command, "Showing your notes."); onComplete?.invoke() }
+            AssistantCommand.ShowPlanner -> { navigateTo(Page.Planner); showResult(command, "Showing your planner."); onComplete?.invoke() }
+            AssistantCommand.ShowNotes -> { navigateTo(Page.Notes); showResult(command, "Showing your notes."); onComplete?.invoke() }
+            AssistantCommand.Identity -> { showResult(command, AssistantIdentity.RESPONSE); onComplete?.invoke() }
             is AssistantCommand.SetFlashlight -> if (
                 ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
             ) {
@@ -627,8 +733,21 @@ private fun ZeroApp(
                 onComplete?.invoke()
             }
             else -> {
-                executeCommand(context, command, history, lines, speak, speechOutput) { notice = it }
-                onComplete?.invoke()
+                val config = aiProviderSettings.configuration()
+                val route = AssistantResponseRouter.select(
+                    command = parsed,
+                    onlineEnabled = config.enabled && config.model.isNotBlank(),
+                    keyConfigured = config.hasApiKey,
+                    endpointValid = com.zero.assistant.core.AiProviderContract.validHttpsEndpoint(config.endpoint),
+                    internetAvailable = hasValidatedInternet(context),
+                )
+                if (route == AssistantResponseRoute.ConfirmOnline) {
+                    pendingOnlineQuestion = command
+                    pendingOnlineContinuation = onComplete
+                } else {
+                    executeCommand(context, command, history, lines, speak, speechOutput) { notice = it }
+                    onComplete?.invoke()
+                }
             }
         }
     }
@@ -685,11 +804,11 @@ private fun ZeroApp(
                         letterSpacing = 0.sp,
                     )
                 },
-                navigationIcon = { if (page != Page.Home) IconButton(onClick = { page = Page.Home }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                navigationIcon = { if (page != Page.Home) IconButton(onClick = { navigateBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
                     if (page == Page.Home) {
-                        TextButton(onClick = { page = Page.History }) { Text("History") }
-                        IconButton(onClick = { page = Page.Settings }) { Icon(Icons.Default.Settings, "Settings") }
+                        TextButton(onClick = { navigateTo(Page.History) }) { Text("History") }
+                        IconButton(onClick = { navigateTo(Page.Settings) }) { Icon(Icons.Default.Settings, "Settings") }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = background),
@@ -699,9 +818,18 @@ private fun ZeroApp(
                 Page.Home -> HomeScreen(
                     Modifier.padding(padding), lines, input, { input = it }, notice,
                     recognitionState, isListening || wakeWordActive,
+                    orbActivity = when {
+                        speechOutputStatus == SpeechOutputStatus.Speaking -> OrbActivity.Speaking
+                        isListening || wakeWordActive -> OrbActivity.Listening
+                        onlineRequestRunning || recognitionState is OfflineRecognitionState.LoadingModel -> OrbActivity.Processing
+                        else -> OrbActivity.Idle
+                    },
+                    reducedMotion = reducedMotion,
                     batteryStatus = batteryStatus,
                     reminders = reminderRepository.all(),
                     wakeWordEnabled = wakeWordEnabled,
+                    wakeWordServiceActive = wakeWordActive,
+                    wakeWordError = wakeWordError,
                     onSend = {
                         val command = input.trim()
                         if (command.isNotEmpty()) {
@@ -724,23 +852,8 @@ private fun ZeroApp(
                         if (wakeWordEnabled) stopBackgroundListening()
                         stopListening()
                     },
-                    onShortcut = { label ->
-                        when (label) {
-                            "Wi-Fi" -> notice = openSettingsTarget(context, "wifi")
-                            "Bluetooth" -> notice = openSettingsTarget(context, "bluetooth")
-                            "Call" -> runCatching {
-                                context.startActivity(Intent(Intent.ACTION_DIAL).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                                notice = "Opened the dialer. Review the number before placing a call."
-                            }.onFailure { notice = "The Android dialer is unavailable." }
-                            else -> runCommand(when (label) {
-                                "Torch on" -> "torch on"
-                                "Torch off" -> "torch off"
-                                "Battery" -> "battery status"
-                                else -> "open ${label.lowercase()}"
-                            })
-                        }
-                    },
-                    onNavigate = { page = it },
+                    onSuggestion = { suggestion -> runCommand(suggestion.command) },
+                    onNavigate = { navigateTo(it) },
                 )
                 Page.History -> HistoryScreen(Modifier.padding(padding), history.recent(), onClear = { history.clear(); notice = "History cleared from this device." }, notice = notice)
                 Page.Settings -> SettingsScreen(
@@ -758,10 +871,12 @@ private fun ZeroApp(
                     wakeWordEnabled = wakeWordEnabled,
                     wakeWordActive = wakeWordActive,
                     wakeWordError = wakeWordError,
-                    wakeWordPhrase = wakeWordPhrase,
-                    onWakeWordPhrase = {
-                        wakeWordPhrase = it
-                        WakeWordSettings.setPhrase(context, it)
+                    wakeWordPhrases = wakeWordPhrases,
+                    wakeWordLastDetection = wakeWordLastDetection,
+                    microphonePermissionGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
+                    onWakeWordPhrasesChanged = {
+                        wakeWordPhrases = it
+                        WakeWordSettings.setPhrases(context, it)
                     },
                     onWakeWordEnabled = { enabled ->
                         if (enabled && ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -772,7 +887,13 @@ private fun ZeroApp(
                             if (enabled) page = Page.Home
                         }
                     },
-                    onNavigate = { page = it },
+                    reducedMotion = reducedMotion,
+                    onReducedMotion = {
+                        reducedMotion = it
+                        accessibilityPreferences.edit().putBoolean("reduced_motion", it).apply()
+                    },
+                    aiProviderSettings = aiProviderSettings,
+                    onNavigate = { navigateTo(it) },
                 )
                 Page.SpeechModels -> SpeechModelsScreen(
                     modifier = Modifier.padding(padding),
@@ -847,11 +968,11 @@ private fun ZeroApp(
                             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
                         }.onFailure { notice = "Android app settings could not be opened." }
                     },
-                    onNavigate = { page = it },
+                    onNavigate = { navigateTo(it) },
                 )
-                Page.Help -> TextPage(Modifier.padding(padding), "Help", "Try commands like:\n\n• Open YouTube / YouTube kholo\n• Torch chalu karo / Torch band karo\n• Abhi kitne baje hain? / battery status\n• note buy milk\n• remind me to call Sam, then set its date and time in Planner\n• planner / notes\n• run Morning Routine\n• call followed by a phone number (ZERO asks you to confirm)\n\nVoice transcripts appear in the command field for review. Unsupported or ambiguous actions remain typed-only or ask for clarification.")
-                Page.Privacy -> TextPage(Modifier.padding(padding), "Privacy policy", "Typed commands, command execution, history, speech, notes, reminders, shortcuts, and model inference are processed on this device. ZERO does not upload commands, audio, notes, reminders, or history and has no accounts, cloud AI, analytics, or ads. Local records use app-private storage and can be removed in-app. ZERO does not retain raw audio.\n\nMicrophone capture starts after you tap Mic or explicitly enable wake listening and grant permission. Wake listening is active only while ZERO is in the foreground. Recognition uses the selected local Vosk model; it does not use an online recognizer. The Hindi model is bundled. English model downloads use the fixed HTTPS URL and checksum in ZERO's catalog, then remain in private app storage. Internet access is only for those model downloads. Microphone capture stops when you cancel recognition or ZERO leaves the foreground.\n\nReminders and battery alerts are scheduled locally. Android may defer notifications, and force-stopping ZERO prevents delivery until it is opened again. Text-to-speech uses an Android voice that reports it does not require a network connection. Voice packages are managed by Android and are not part of ZERO's recognition-model store.")
-                Page.Terms -> TextPage(Modifier.padding(padding), "Terms", "ZERO is provided as-is for personal use. Recognition is processed locally using the selected compatible Vosk model. Speech accuracy depends on language, microphone, device performance, and environment; automatic Hinglish recognition is not promised. Android TTS must have a compatible local voice installed. Reminder delivery is inexact and can be delayed or suppressed by Android power management, notification permission, or force-stop. Battery alerts are periodically checked and are not guaranteed after force-stop. External app launches, flashlight hardware, and call placement depend on the device. ZERO confirms the target number before direct call permission; if permission or calling is unavailable, it opens the dialer for review.")
+                Page.Help -> TextPage(Modifier.padding(padding), "Help and troubleshooting", "Try commands like:\n\n• Open YouTube / YouTube kholo\n• Torch chalu karo / Torch band karo\n• Abhi kitne baje hain? / battery status\n• note buy milk\n• remind me to call Sam, then set its date and time in Planner\n• planner / notes\n• call followed by a phone number (ZERO asks you to confirm)\n\nTo enable background wake listening, open Settings, enable Background wake listening, and grant microphone and notification permissions. Keep the persistent ZERO notification visible; its Stop action ends microphone use. Enabled phrases are supplied to Vosk as a constrained grammar; recognition depends on the selected model's vocabulary and language.\n\nAndroid and device manufacturers may pause or stop microphone use because of battery management, privacy controls, force-stop, or reboot policy. After reboot, Android requires you to tap a notification and reopen ZERO before microphone capture resumes. Battery optimization guidance opens Android system settings. Speech transcripts and actions are handled locally; unsupported or sensitive commands may require review in ZERO.")
+                Page.Privacy -> TextPage(Modifier.padding(padding), "Privacy and permissions", "Typed commands, command execution, history, speech recognition, notes, reminders, shortcuts, and model inference run on this device. ZERO does not upload commands, audio, notes, reminders, or history; it has no account, analytics, or ads. Local records and downloaded models use app-private storage. ZERO does not retain raw audio.\n\nMicrophone capture starts after you tap Mic or explicitly enable wake listening and grant permission. When enabled, the foreground service continues wake recognition after the Home screen closes and shows a persistent notification. Vosk recognition and wake-phrase grammar matching are local. Hindi recognition is bundled; the optional English model is downloaded from the fixed HTTPS URL and checksum in the catalog. Optional online AI sends only a confirmed text query to the configured provider; microphone audio and local history are not sent.\n\nAndroid may interrupt the foreground service or defer notifications because of battery management, permission changes, force-stop, or reboot policy. After reboot, ZERO requires a user tap before microphone access resumes. Android TTS uses an installed voice that reports it does not require a network connection.")
+                Page.Terms -> TextPage(Modifier.padding(padding), "Terms of Use", "ZERO is provided as-is for personal use. Recognition is processed locally using the selected compatible Vosk model. Speech accuracy depends on language, microphone, device performance, and environment; automatic Hinglish recognition is not promised. Android TTS must have a compatible local voice installed. Optional online AI sends text to a provider only after confirmation and requires the user to configure and trust that provider; the provider's own terms and data handling apply. Reminder delivery is inexact and may be delayed or suppressed by Android power management, notification permission, or force-stop. External app launches, flashlight hardware, and calls depend on the device. ZERO confirms a target number before direct-call permission; if permission or calling is unavailable, it opens the dialer for review.")
             }
         }
         pendingCallNumber?.let { number ->
@@ -895,6 +1016,45 @@ private fun ZeroApp(
                 dismissButton = { TextButton(onClick = { pendingWhatsAppDraft = null }) { Text("Cancel") } },
             )
         }
+        pendingOnlineQuestion?.let { query ->
+            val host = runCatching { java.net.URI(aiProviderSettings.configuration().endpoint).host }.getOrNull().orEmpty()
+            AlertDialog(
+                onDismissRequest = {
+                    pendingOnlineQuestion = null
+                    pendingOnlineContinuation?.invoke()
+                    pendingOnlineContinuation = null
+                    executeCommand(context, query, history, lines, speak, speechOutput) { notice = it }
+                },
+                title = { Text("Send text to online AI?") },
+                text = {
+                    Text("ZERO will send only this question over HTTPS${if (host.isNotBlank()) " to $host" else ""}. Microphone audio and local history are not sent. Choose Stay offline to cancel transmission.")
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        pendingOnlineQuestion = null
+                        pendingOnlineContinuation?.invoke()
+                        pendingOnlineContinuation = null
+                        answerOnlineQuestion(query)
+                    }) { Text("Send text") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        pendingOnlineQuestion = null
+                        pendingOnlineContinuation?.invoke()
+                        pendingOnlineContinuation = null
+                        executeCommand(context, query, history, lines, speak, speechOutput) { notice = it }
+                    }) { Text("Stay offline") }
+                },
+            )
+        }
+        if (onlineRequestRunning) {
+            AlertDialog(
+                onDismissRequest = { onlineRequestJob?.cancel() },
+                title = { Text("Online AI is responding") },
+                text = { Text("The request is in progress. You can cancel it. Microphone audio is never sent.") },
+                confirmButton = { TextButton(onClick = { onlineRequestJob?.cancel() }) { Text("Cancel request") } },
+            )
+        }
         }
     }
 }
@@ -929,16 +1089,21 @@ private fun HomeScreen(
     notice: String?,
     recognitionState: OfflineRecognitionState,
     isListening: Boolean,
+    orbActivity: OrbActivity,
+    reducedMotion: Boolean,
     batteryStatus: BatteryStatus,
     reminders: List<PlannerReminder>,
     wakeWordEnabled: Boolean,
+    wakeWordServiceActive: Boolean,
+    wakeWordError: String?,
     onSend: () -> Unit,
     onMic: () -> Unit,
     onStopListening: () -> Unit,
-    onShortcut: (String) -> Unit,
+    onSuggestion: (HomeSuggestion) -> Unit,
     onNavigate: (Page) -> Unit,
 ) {
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var showMoreSuggestions by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         while (true) {
             delay(30_000)
@@ -953,76 +1118,48 @@ private fun HomeScreen(
     }.minByOrNull { it.first }?.let { (trigger, reminder) ->
         reminder.title to DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(trigger))
     }
-    Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
-        Spacer(Modifier.height(8.dp))
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("LOCAL TIME", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f))
-                    Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(nowMillis)), fontSize = 42.sp, fontWeight = FontWeight.Light, lineHeight = 48.sp)
-                    Text(DateFormat.getDateInstance(DateFormat.FULL).format(Date(nowMillis)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(if (isListening) "MIC LIVE" else "MIC IDLE", style = MaterialTheme.typography.labelMedium, color = if (isListening) Color(0xFF5CE1C6) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f))
-                    Text(if (wakeWordEnabled) "WAKE · ON" else "WAKE · OFF", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
-                }
+    val primarySuggestions = HomeSuggestionCatalog.primary
+    val moreSuggestions = HomeSuggestionCatalog.more
+    Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
+        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(nowMillis)), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Light)
+                Text("${if (batteryStatus.percent in 0..100) "BATTERY ${batteryStatus.percent}%" else "BATTERY UNAVAILABLE"}  ·  ${nextReminder?.let { "NEXT ${it.second}" } ?: "NO UPCOMING REMINDER"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            Text(if (wakeWordServiceActive) "WAKE ACTIVE" else if (wakeWordEnabled) "WAKE NOT RUNNING" else "WAKE OFF", style = MaterialTheme.typography.labelSmall, color = if (wakeWordServiceActive) Color(0xFF54D7E8) else MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Card(Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                    Text("BATTERY", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f))
-                    Text(if (batteryStatus.percent in 0..100) "${batteryStatus.percent}%${if (batteryStatus.charging) " · Charging" else ""}" else "Unavailable", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                }
-            }
-            Card(Modifier.weight(1f), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                    Text("NEXT REMINDER", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f))
-                    Text(nextReminder?.first ?: "Nothing scheduled", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                    if (nextReminder != null) Text(nextReminder.second, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f))
-                }
-            }
+        AssistantOrb(
+            activity = orbActivity,
+            reducedMotion = reducedMotion,
+            modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 2.dp),
+        )
+        val activityMessage = when (orbActivity) {
+            OrbActivity.Idle -> "ZERO READY · OFFLINE COMMANDS AVAILABLE"
+            OrbActivity.Listening -> "LISTENING · MICROPHONE IN USE"
+            OrbActivity.Processing -> "PROCESSING LOCALLY"
+            OrbActivity.Speaking -> "ZERO IS SPEAKING"
         }
-        Spacer(Modifier.height(8.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            listOf(
-                listOf("YouTube", "WhatsApp", "Camera"),
-                listOf("Torch on", "Torch off", "Battery"),
-                listOf("Wi-Fi", "Bluetooth", "Call"),
-            ).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    row.forEach { item ->
-                        Button(
-                            onClick = { onShortcut(item) },
-                            modifier = Modifier.weight(1f).height(42.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Mint, contentColor = Forest),
-                            contentPadding = ButtonDefaults.ContentPadding,
-                        ) { Text(item, maxLines = 1, fontSize = 12.sp) }
-                    }
-                }
-            }
+        Text(activityMessage, Modifier.fillMaxWidth(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (wakeWordEnabled && !wakeWordServiceActive) {
+            Text(wakeWordError ?: "Wake listening is enabled but not currently running.", Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2)
         }
-        Spacer(Modifier.height(8.dp))
+        HomeSuggestionRail(
+            suggestions = if (showMoreSuggestions) primarySuggestions + moreSuggestions else primarySuggestions,
+            expanded = showMoreSuggestions,
+            animate = !reducedMotion && orbActivity == OrbActivity.Idle && !isListening && input.isBlank() && !showMoreSuggestions,
+            onSuggestion = onSuggestion,
+            onToggleMore = { showMoreSuggestions = !showMoreSuggestions },
+        )
+        lines.lastOrNull()?.let { lastLine ->
+            Text(if (lastLine.fromZero) lastLine.text else "You: ${lastLine.text}", Modifier.fillMaxWidth(), maxLines = 1, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         when (val state = recognitionState) {
             is OfflineRecognitionState.LoadingModel -> Text("Loading local speech model…", style = MaterialTheme.typography.bodySmall)
             is OfflineRecognitionState.Listening -> Text("Listening with ${state.modelId}…", style = MaterialTheme.typography.bodySmall)
             is OfflineRecognitionState.Failed -> Text(state.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             OfflineRecognitionState.Idle, OfflineRecognitionState.Cancelled, is OfflineRecognitionState.Result -> Unit
         }
-        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), reverseLayout = true) {
-            items(lines.asReversed()) { line ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = if (line.fromZero) Arrangement.Start else Arrangement.End) {
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = if (line.fromZero) MaterialTheme.colorScheme.surface else Mint),
-                    ) {
-                        Text(line.text, Modifier.padding(horizontal = 14.dp, vertical = 11.dp), color = if (line.fromZero) MaterialTheme.colorScheme.onSurface else Forest)
-                    }
-                }
-            }
-        }
-        if (notice != null) Text(notice, Modifier.fillMaxWidth().padding(bottom = 6.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        if (notice != null) Text(notice, Modifier.fillMaxWidth().padding(bottom = 4.dp), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(
             value = input,
             onValueChange = onInput,
@@ -1033,7 +1170,7 @@ private fun HomeScreen(
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
             keyboardActions = KeyboardActions(onSend = { onSend() }),
             trailingIcon = {
-                    Row {
+                Row {
                     IconButton(onClick = if (isListening) onStopListening else onMic) {
                         Text(if (isListening) "Stop" else "Mic", color = if (isListening) MaterialTheme.colorScheme.error else Forest, fontSize = 12.sp)
                     }
@@ -1041,11 +1178,42 @@ private fun HomeScreen(
                 }
             },
         )
-        Row(Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = { onNavigate(Page.Help) }) { Text("Help") }
-            TextButton(onClick = { onNavigate(Page.Privacy) }) { Text("Privacy") }
-            TextButton(onClick = { onNavigate(Page.Terms) }) { Text("Terms") }
+    }
+}
+
+@Composable
+private fun HomeSuggestionRail(
+    suggestions: List<HomeSuggestion>,
+    expanded: Boolean,
+    animate: Boolean,
+    onSuggestion: (HomeSuggestion) -> Unit,
+    onToggleMore: () -> Unit,
+) {
+    val phase = if (animate) {
+        val transition = rememberInfiniteTransition(label = "suggestion-orbit")
+        val animatedPhase by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = (2f * PI).toFloat(),
+            animationSpec = infiniteRepeatable(tween(11_000, easing = LinearEasing), RepeatMode.Restart),
+            label = "suggestion-phase",
+        )
+        animatedPhase
+    } else 0f
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        suggestions.forEachIndexed { index, suggestion ->
+            val bob = if (animate) sin(phase + index * 0.8f) * 4f else 0f
+            FilterChip(
+                selected = false,
+                onClick = { onSuggestion(suggestion) },
+                modifier = Modifier.offset(y = bob.dp),
+                label = { Text(suggestion.label, maxLines = 1) },
+            )
         }
+        TextButton(onClick = onToggleMore) { Text(if (expanded) "Less" else "More") }
     }
 }
 
@@ -1086,16 +1254,38 @@ private fun SettingsScreen(
     wakeWordEnabled: Boolean,
     wakeWordActive: Boolean,
     wakeWordError: String?,
-    wakeWordPhrase: String,
-    onWakeWordPhrase: (String) -> Unit,
+    wakeWordPhrases: List<WakePhrase>,
+    wakeWordLastDetection: Long,
+    microphonePermissionGranted: Boolean,
+    onWakeWordPhrasesChanged: (List<WakePhrase>) -> Unit,
     onWakeWordEnabled: (Boolean) -> Unit,
+    reducedMotion: Boolean,
+    onReducedMotion: (Boolean) -> Unit,
+    aiProviderSettings: AiProviderSettings,
     onNavigate: (Page) -> Unit,
 ) {
+    val context = LocalContext.current
+    var editingPhraseId by remember { mutableStateOf<String?>(null) }
+    var phraseDraft by remember { mutableStateOf("") }
+    var phraseEditorVisible by remember { mutableStateOf(false) }
+    var phraseEditorError by remember { mutableStateOf<String?>(null) }
+    var aiConfiguration by remember { mutableStateOf(aiProviderSettings.configuration()) }
+    var aiEndpoint by remember { mutableStateOf(aiConfiguration.endpoint) }
+    var aiModel by remember { mutableStateOf(aiConfiguration.model) }
+    var apiKeyDraft by remember { mutableStateOf("") }
+    var aiSettingsMessage by remember { mutableStateOf<String?>(null) }
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Preferences", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AssistantOrb(OrbActivity.Idle, reducedMotion = true, Modifier.size(58.dp))
+            Column {
+                Text("ZERO SYSTEM SETTINGS", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                Text("Local controls · version 17.7.07", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        SettingSwitch("Reduce motion", "Keep the orb and suggestion rail static.", reducedMotion, onReducedMotion)
         val speechOutputReady = speechOutputStatus is SpeechOutputStatus.Ready || speechOutputStatus is SpeechOutputStatus.ReadyWithVoice
         val speechEngineReady = speechOutputReady || speechOutputStatus is SpeechOutputStatus.LanguageUnavailable
         SettingSwitch("Speak responses", speechOutputStatusMessage(speechOutputStatus), speechOutput, onSpeechOutput, enabled = speechOutputReady)
@@ -1127,7 +1317,7 @@ private fun SettingsScreen(
         SettingSwitch(
             "Background wake listening",
             when {
-                wakeWordActive -> "Microphone is active in the background. Use the persistent notification to stop."
+                wakeWordActive -> "Service is running with microphone access. Use its persistent notification to stop."
                 wakeWordError != null -> wakeWordError
                 wakeWordEnabled -> "Enabled; waiting for microphone access or a visible app launch to resume."
                 else -> "Off by default. A persistent notification stays visible while listening."
@@ -1135,18 +1325,138 @@ private fun SettingsScreen(
             wakeWordEnabled,
             onWakeWordEnabled,
         )
+        Text("Wake-word diagnostics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+        Text("Wake engine: ${when { wakeWordActive && activeModelId != null -> "running with $activeModelId"; activeModelId != null -> "$activeModelId selected; capture is not running"; else -> "unavailable until an offline STT model is ready" }}")
+        Text("Microphone permission: ${if (microphonePermissionGranted) "granted" else "not granted"}")
+        Text("Listening service: ${if (wakeWordActive) "running" else if (wakeWordEnabled) "enabled but not running" else "stopped"}")
+        Text("Enabled phrases use Vosk's constrained grammar; phrase accuracy depends on the selected model and language.", style = MaterialTheme.typography.bodySmall)
+        Text("Last detection: ${if (wakeWordLastDetection > 0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(wakeWordLastDetection)) else "Never"}", style = MaterialTheme.typography.bodySmall)
+        wakeWordError?.let { Text("Last service error: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        wakeWordPhrases.forEach { phrase ->
+            SettingSwitch(
+                phrase.phrase,
+                when {
+                    !phrase.enabled -> "Disabled"
+                    phrase.isDefault -> "Default phrase; it remains configured unless you disable it."
+                    activeModelId == null -> "Enabled; awaiting a compatible local speech model"
+                    else -> "Enabled; included in the active Vosk grammar"
+                },
+                phrase.enabled,
+                { enabled -> onWakeWordPhrasesChanged(WakePhraseConfiguration.setEnabled(wakeWordPhrases, phrase.id, enabled)) },
+            )
+            if (!phrase.isDefault) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TextButton(onClick = {
+                        editingPhraseId = phrase.id
+                        phraseDraft = phrase.phrase
+                        phraseEditorError = null
+                        phraseEditorVisible = true
+                    }) { Text("Edit") }
+                    TextButton(onClick = { onWakeWordPhrasesChanged(WakePhraseConfiguration.remove(wakeWordPhrases, phrase.id)) }) { Text("Remove") }
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = {
+                    editingPhraseId = null
+                    phraseDraft = ""
+                    phraseEditorError = null
+                    phraseEditorVisible = true
+                },
+                enabled = wakeWordPhrases.size < 3,
+            ) { Text("Add custom phrase") }
+            TextButton(onClick = {
+                onWakeWordPhrasesChanged(WakePhraseConfiguration.setEnabled(wakeWordPhrases, "default", true))
+            }) { Text("Restore Hey ZERO") }
+        }
+        Text("Say an enabled phrase, pause for the offline acknowledgement, then speak a command. Vosk uses a grammar built from enabled phrases; accuracy varies by model. Android may stop microphone access because of force-stop, battery controls, reboot policy, or device restrictions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        TextButton(onClick = {
+            runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+        }) { Text("Battery optimization guidance") }
+        Text("Optional online AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+        SettingSwitch(
+            "Enable online AI",
+            if (aiConfiguration.hasApiKey) "Disabled by default. Each unsupported question requires confirmation before text is sent." else "Disabled. Save an API key before enabling; local commands remain available without one.",
+            aiConfiguration.enabled,
+            { enabled ->
+                aiProviderSettings.saveConfiguration(aiEndpoint, aiModel, enabled)
+                    .onSuccess { aiConfiguration = aiProviderSettings.configuration(); aiSettingsMessage = null }
+                    .onFailure { aiSettingsMessage = it.message ?: "AI settings could not be saved." }
+            },
+        )
         OutlinedTextField(
-            value = wakeWordPhrase,
-            onValueChange = onWakeWordPhrase,
+            value = aiEndpoint,
+            onValueChange = { aiEndpoint = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Wake phrase") },
+            label = { Text("HTTPS Chat Completions endpoint") },
             singleLine = true,
         )
-        TextButton(onClick = { onWakeWordPhrase(WakeWord.DEFAULT_PHRASE) }) { Text("Use default: ${WakeWord.DEFAULT_PHRASE}") }
-        Text("Say the phrase followed by a command, for example: Hey ZERO, open YouTube. This uses the selected offline speech model and Android microphone permission. Continuous software listening can increase battery use; turn it off in Settings or use Stop in its persistent notification when you do not need it.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
-        Text("ZERO-Assist version 17.7.07", style = MaterialTheme.typography.labelMedium)
-        TextButton(onClick = { onNavigate(Page.Privacy) }) { Text("Privacy policy") }
-        TextButton(onClick = { onNavigate(Page.Terms) }) { Text("Terms") }
+        OutlinedTextField(
+            value = aiModel,
+            onValueChange = { aiModel = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Provider model identifier") },
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = apiKeyDraft,
+            onValueChange = { apiKeyDraft = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(if (aiConfiguration.hasApiKey) "Replace API key" else "API key") },
+            visualTransformation = PasswordVisualTransformation(),
+            singleLine = true,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                aiProviderSettings.saveConfiguration(aiEndpoint, aiModel, aiConfiguration.enabled)
+                    .onSuccess {
+                        if (apiKeyDraft.isBlank() || aiProviderSettings.saveApiKey(apiKeyDraft)) {
+                            apiKeyDraft = ""
+                            aiConfiguration = aiProviderSettings.configuration()
+                            aiSettingsMessage = "Settings saved. Each online question still asks before sending."
+                        } else aiSettingsMessage = "The API key could not be encrypted by Android Keystore."
+                    }
+                    .onFailure { aiSettingsMessage = it.message ?: "AI settings could not be saved." }
+            }) { Text("Save AI settings") }
+            TextButton(onClick = {
+                aiProviderSettings.clearApiKey()
+                aiConfiguration = aiProviderSettings.configuration()
+                aiSettingsMessage = "Saved API key removed from this device."
+            }, enabled = aiConfiguration.hasApiKey) { Text("Clear key") }
+        }
+        Text("The key is encrypted with Android Keystore, but secrets used by a distributed app cannot be guaranteed safe from extraction. Enter only a provider endpoint and key you trust; ZERO sends text only after confirmation and never sends microphone audio.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        aiSettingsMessage?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+        Text("Settings shortcuts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+        TextButton(onClick = { onNavigate(Page.Help) }) { Text("Help and Troubleshooting") }
+        TextButton(onClick = { onNavigate(Page.Privacy) }) { Text("Privacy and Permissions") }
+        TextButton(onClick = { onNavigate(Page.Terms) }) { Text("Terms of Use") }
+        TextButton(onClick = { onNavigate(Page.SpeechModels) }) { Text("Voice Library and storage") }
+        Text("About ZERO-Assist · version 17.7.07", style = MaterialTheme.typography.labelMedium)
+    }
+    if (phraseEditorVisible) {
+        AlertDialog(
+            onDismissRequest = { phraseEditorVisible = false },
+            title = { Text(if (editingPhraseId == null) "Add custom wake phrase" else "Edit wake phrase") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(phraseDraft, { phraseDraft = it }, label = { Text("Phrase") }, singleLine = true)
+                    phraseEditorError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    Text("Vosk grammar matching is constrained by the selected recognition model's vocabulary.", style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    runCatching {
+                        val updated = editingPhraseId?.let { WakePhraseConfiguration.update(wakeWordPhrases, it, phraseDraft) }
+                            ?: WakePhraseConfiguration.add(wakeWordPhrases, phraseDraft)
+                        onWakeWordPhrasesChanged(updated)
+                        phraseEditorVisible = false
+                    }.onFailure { phraseEditorError = it.message ?: "Wake phrase could not be saved." }
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { phraseEditorVisible = false }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -1158,6 +1468,7 @@ private fun speechOutputStatusMessage(status: SpeechOutputStatus): String = when
         "No offline ${status.language.label} voice is installed. Open Voice Library to install voice data from Android's speech engine."
     SpeechOutputStatus.InitializationFailed -> "Android text-to-speech could not initialize. Check the installed TTS engine in Android Settings."
     SpeechOutputStatus.SpeakFailed -> "The local TTS engine could not speak. Check its installed voice data in Android Settings."
+    SpeechOutputStatus.Speaking -> "ZERO is speaking with the installed local voice."
     SpeechOutputStatus.Closed -> "Speech output is stopped."
 }
 
@@ -1194,6 +1505,7 @@ private fun executeCommand(
     lines.add(ChatLine(false, input))
     val command = CommandParser.parse(input)
     val response = when (command) {
+        AssistantCommand.Identity -> AssistantIdentity.RESPONSE
         is AssistantCommand.OpenApp -> openApp(context, command.app)
         is AssistantCommand.SetFlashlight -> setFlashlight(context, command.enabled)
         is AssistantCommand.CallNumber -> callNumber(context, command.number, allowDirectCall)
@@ -1285,6 +1597,14 @@ private fun executeShortcut(
         }
     }
     runAction(0)
+}
+
+private fun hasValidatedInternet(context: Context): Boolean {
+    val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return false
+    val network = connectivity.activeNetwork ?: return false
+    val capabilities = connectivity.getNetworkCapabilities(network) ?: return false
+    return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
 }
 
 private fun openSettingsTarget(context: Context, target: String): String {
