@@ -44,10 +44,15 @@ class VaultManager(context: Context) {
     private val vaultDirectory = File(appContext.filesDir, "private_vault").apply { mkdirs() }
     private val gson = Gson()
     private var masterKey: ByteArray? = null
+    private var unlockedAtMillis = 0L
 
     fun initialized(): Boolean = preferences.contains(KEY_MASTER)
     fun isUnlocked(): Boolean = masterKey != null
-    fun lock() { masterKey = null }
+    fun lock() {
+        masterKey?.fill(0)
+        masterKey = null
+        unlockedAtMillis = 0L
+    }
 
     fun initialize(password: String): Result<Unit> = runCatching {
         VaultSecurity.validatePassword(password)?.let { throw IllegalArgumentException(it) }
@@ -81,6 +86,7 @@ class VaultManager(context: Context) {
         }
         val wrapped = preferences.getString(KEY_MASTER, null) ?: throw IllegalStateException("Vault key is unavailable.")
         masterKey = decryptWithKeystore(wrapped)
+        unlockedAtMillis = nowMillis
         preferences.edit().remove(KEY_ATTEMPTS).apply()
     }
 
@@ -88,9 +94,41 @@ class VaultManager(context: Context) {
         check(initialized()) { "Vault is not initialized." }
         val wrapped = preferences.getString(KEY_MASTER, null) ?: throw IllegalStateException("Vault key is unavailable.")
         masterKey = decryptWithKeystore(wrapped)
+        unlockedAtMillis = System.currentTimeMillis()
         preferences.edit().remove(KEY_ATTEMPTS).apply()
         true
     }.getOrElse { masterKey = null; false }
+
+    fun setupRecovery(recoveryPassword: String): Result<Unit> = runCatching {
+        VaultSecurity.validatePassword(recoveryPassword)?.let { throw IllegalArgumentException(it) }
+        val master = requireUnlocked()
+        val salt = VaultSecurity.newSalt()
+        val recoveryKey = passwordKey(recoveryPassword, salt)
+        val wrapped = Base64.encodeToString(encryptBytes(master.copyOf(), recoveryKey, RECOVERY_AAD), Base64.NO_WRAP)
+        preferences.edit()
+            .putString(KEY_RECOVERY_SALT, Base64.encodeToString(salt, Base64.NO_WRAP))
+            .putString(KEY_RECOVERY_VERIFIER, Base64.encodeToString(passwordVerifier(recoveryPassword, salt), Base64.NO_WRAP))
+            .putString(KEY_RECOVERY_MASTER, wrapped)
+            .apply()
+        recoveryKey.fill(0)
+    }
+
+    fun unlockWithRecovery(recoveryPassword: String): Result<Unit> = runCatching {
+        VaultSecurity.validatePassword(recoveryPassword)?.let { throw IllegalArgumentException(it) }
+        check(initialized()) { "Vault is not initialized." }
+        val salt = decode(preferences.getString(KEY_RECOVERY_SALT, null) ?: throw IllegalStateException("No owner recovery credential is configured."))
+        val expected = decode(preferences.getString(KEY_RECOVERY_VERIFIER, null) ?: throw IllegalStateException("No owner recovery credential is configured."))
+        val actual = passwordVerifier(recoveryPassword, salt)
+        check(MessageDigest.isEqual(expected, actual)) { "Incorrect recovery passphrase." }
+        val key = passwordKey(recoveryPassword, salt)
+        val wrapped = Base64.decode(preferences.getString(KEY_RECOVERY_MASTER, null) ?: throw IllegalStateException("Recovery data is unavailable."), Base64.NO_WRAP)
+        masterKey = decryptBytes(wrapped, key, RECOVERY_AAD)
+        key.fill(0)
+        unlockedAtMillis = System.currentTimeMillis()
+    }
+
+    fun recoveryConfigured(): Boolean =
+        preferences.contains(KEY_RECOVERY_MASTER) && preferences.contains(KEY_RECOVERY_VERIFIER)
 
     fun changePassword(current: String, replacement: String, nowMillis: Long): Result<Unit> = runCatching {
         unlock(current, nowMillis).getOrThrow()
@@ -325,7 +363,22 @@ class VaultManager(context: Context) {
         return try { SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded } finally { spec.clearPassword() }
     }
 
-    private fun requireUnlocked(): ByteArray = masterKey ?: throw IllegalStateException("Unlock the Vault first.")
+    private fun requireUnlocked(): ByteArray {
+        val key = masterKey ?: throw IllegalStateException("Unlock the Vault first.")
+        if (unlockedAtMillis != 0L && System.currentTimeMillis() - unlockedAtMillis > SESSION_TIMEOUT_MILLIS) {
+            key.fill(0)
+            masterKey = null
+            unlockedAtMillis = 0L
+            throw IllegalStateException("Vault session timed out. Unlock it again.")
+        }
+        unlockedAtMillis = System.currentTimeMillis()
+        return key
+    }
+
+    private fun passwordKey(password: String, salt: ByteArray): ByteArray {
+        val derived = passwordVerifier(password, salt)
+        return derived.copyOf(32)
+    }
 
     private fun encryptWithKeystore(value: ByteArray): String {
         val cipher = Cipher.getInstance(TRANSFORMATION)
@@ -395,12 +448,17 @@ class VaultManager(context: Context) {
         const val KEY_SALT = "password_salt"
         const val KEY_VERIFIER = "password_verifier"
         const val KEY_ATTEMPTS = "attempts"
+        const val KEY_RECOVERY_SALT = "recovery_salt"
+        const val KEY_RECOVERY_VERIFIER = "recovery_verifier"
+        const val KEY_RECOVERY_MASTER = "recovery_master"
         const val KEY_ALIAS = "zero_vault_master_v1"
         const val ANDROID_KEY_STORE = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_BITS = 128
         val MANIFEST_AAD = "ZERO_VAULT_MANIFEST_V1".toByteArray(StandardCharsets.UTF_8)
         val FOLDER_AAD = "ZERO_VAULT_FOLDERS_V1".toByteArray(StandardCharsets.UTF_8)
+        val RECOVERY_AAD = "ZERO_VAULT_RECOVERY_V1".toByteArray(StandardCharsets.UTF_8)
+        const val SESSION_TIMEOUT_MILLIS = 15L * 60L * 1000L
     }
 }
 

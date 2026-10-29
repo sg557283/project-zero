@@ -71,6 +71,25 @@ internal object OrganicOrbGeometry {
         edgeSet.forEach { edge ->
             edgeList += (edge ushr 32).toInt(); edgeList += (edge and 0xffffffffL).toInt()
         }
+        val flowSeed = Random(170707 + subdivision)
+        val flowEdges = mutableSetOf<Long>()
+        repeat((vertices.size * 0.7f).toInt().coerceAtMost(1_800)) {
+            val first = flowSeed.nextInt(vertices.size)
+            val candidate = vertices.indices.filter { second ->
+                if (second == first) return@filter false
+                val a = vertices[first]
+                val b = vertices[second]
+                val dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+                dot in 0.54f..0.82f
+            }.randomOrNull(flowSeed) ?: return@repeat
+            val low = minOf(first, candidate)
+            val high = maxOf(first, candidate)
+            val key = low.toLong() shl 32 or (high.toLong() and 0xffffffffL)
+            if (flowEdges.add(key)) {
+                edgeList += low
+                edgeList += high
+            }
+        }
         val random = Random(170707)
         val particles = FloatArray(48 * 4)
         repeat(48) { index ->

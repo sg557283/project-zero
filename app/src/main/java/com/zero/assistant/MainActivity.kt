@@ -54,6 +54,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
@@ -63,6 +64,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -134,6 +137,7 @@ import com.zero.assistant.data.AiProviderSettings
 import com.zero.assistant.data.OpenAiCompatibleProvider
 import com.zero.assistant.data.VaultManager
 import com.zero.assistant.data.HardwareActivationSettings
+import com.zero.assistant.core.VaultVisibility
 import com.zero.assistant.data.DoubleShakeService
 import com.zero.assistant.core.ShakeSensitivity
 import com.zero.assistant.data.AssistantAiProvider
@@ -528,7 +532,10 @@ private fun ZeroApp(
     LaunchedEffect(reminderScheduler) { reminderScheduler.rescheduleAll() }
     var page by rememberSaveable { mutableStateOf(Page.Home) }
     var backDestination by rememberSaveable { mutableStateOf(Page.Home) }
+    val privacyPreferences = remember { context.getSharedPreferences(VaultVisibility.PREF_FILE, Context.MODE_PRIVATE) }
+    var vaultVisible by remember { mutableStateOf(privacyPreferences.getBoolean(VaultVisibility.PREF_VISIBLE, true)) }
     fun navigateTo(destination: Page) {
+        if (destination == Page.Vault && !vaultVisible) return
         if (destination != page) {
             backDestination = page
             page = destination
@@ -927,6 +934,12 @@ private fun ZeroApp(
                         pendingShakePermission.value = true
                         cameraPermission.launch(Manifest.permission.CAMERA)
                     },
+                    vaultVisible = vaultVisible,
+                    onVaultVisible = { visible ->
+                        vaultVisible = visible
+                        privacyPreferences.edit().putBoolean(VaultVisibility.PREF_VISIBLE, visible).apply()
+                        if (!visible && page == Page.Vault) page = Page.Settings
+                    },
                 )
                 Page.SpeechModels -> SpeechModelsScreen(
                     modifier = Modifier.padding(padding),
@@ -1310,6 +1323,8 @@ private fun SettingsScreen(
     aiProviderSettings: AiProviderSettings,
     onNavigate: (Page) -> Unit,
     onRequestShakeCameraPermission: () -> Unit,
+    vaultVisible: Boolean,
+    onVaultVisible: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     var volumeShortcut by remember { mutableStateOf(HardwareActivationSettings.volumePairEnabled(context)) }
@@ -1319,6 +1334,7 @@ private fun SettingsScreen(
     var phraseDraft by remember { mutableStateOf("") }
     var phraseEditorVisible by remember { mutableStateOf(false) }
     var phraseEditorError by remember { mutableStateOf<String?>(null) }
+    var vaultMenuExpanded by remember { mutableStateOf(false) }
     var aiConfiguration by remember { mutableStateOf(aiProviderSettings.configuration()) }
     var aiEndpoint by remember { mutableStateOf(aiConfiguration.endpoint) }
     var aiModel by remember { mutableStateOf(aiConfiguration.model) }
@@ -1357,7 +1373,30 @@ private fun SettingsScreen(
         TextButton(onClick = { onNavigate(Page.BatteryAlerts) }) { Text("Battery Alerts") }
         TextButton(onClick = { onNavigate(Page.Notes) }) { Text("Notes") }
         TextButton(onClick = { onNavigate(Page.MyShortcuts) }) { Text("My Shortcuts") }
-        TextButton(onClick = { onNavigate(Page.Vault) }) { Text("ZERO Vault") }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (vaultVisible) {
+                TextButton(onClick = { onNavigate(Page.Vault) }) { Text("ZERO Vault") }
+            } else {
+                Text("ZERO Vault hidden", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Box {
+                IconButton(onClick = { vaultMenuExpanded = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Vault visibility menu")
+                }
+                DropdownMenu(expanded = vaultMenuExpanded, onDismissRequest = { vaultMenuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text(if (vaultVisible) "Hide Vault" else "Show Vault") },
+                        onClick = {
+                            vaultMenuExpanded = false
+                            onVaultVisible(!vaultVisible)
+                        },
+                    )
+                }
+            }
+        }
         TextButton(onClick = { onNavigate(Page.Emergency) }) { Text("Emergency Quick Mode") }
         TextButton(onClick = { onNavigate(Page.Diagnostics) }) { Text("Self-diagnostics") }
         TextButton(onClick = { onNavigate(Page.Dashboard) }) { Text("Privacy & system dashboard") }

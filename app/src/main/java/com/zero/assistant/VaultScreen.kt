@@ -46,6 +46,7 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
     val activity = context as? FragmentActivity
     val executor = remember { ContextCompat.getMainExecutor(context) }
     var password by remember { mutableStateOf("") }
+    var recoveryPassword by remember { mutableStateOf("") }
     var notice by remember { mutableStateOf<String?>(null) }
     var unlocked by remember { mutableStateOf(manager.isUnlocked()) }
     var refresh by remember { mutableStateOf(0) }
@@ -124,10 +125,24 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
             Button(onClick = { authenticate { unlocked = manager.unlockWithDeviceCredential(); if (!unlocked) notice = "Device authentication succeeded, but Vault storage could not be unlocked." } }) { Text("Unlock with device authentication") }
             OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("Vault password") }, visualTransformation = PasswordVisualTransformation())
             Button(onClick = { manager.unlock(password, System.currentTimeMillis()).onSuccess { unlocked = true; password = ""; notice = null }.onFailure { notice = it.message } }) { Text("Unlock with password") }
+            if (manager.recoveryConfigured()) {
+                OutlinedTextField(recoveryPassword, { recoveryPassword = it }, Modifier.fillMaxWidth(), label = { Text("Owner recovery passphrase") }, visualTransformation = PasswordVisualTransformation())
+                TextButton(onClick = {
+                    manager.unlockWithRecovery(recoveryPassword)
+                        .onSuccess { unlocked = true; recoveryPassword = ""; notice = "Unlocked with owner recovery." }
+                        .onFailure { notice = it.message }
+                }) { Text("Unlock with recovery") }
+            }
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { importFile.launch(arrayOf("image/*", "video/*", "application/pdf", "text/*", "application/*")) }) { Text("Import") }
                 TextButton(onClick = { manager.lock(); unlocked = false; password = "" }) { Text("Lock") }
+                OutlinedTextField(recoveryPassword, { recoveryPassword = it }, Modifier.fillMaxWidth(), label = { Text(if (manager.recoveryConfigured()) "Replace owner recovery passphrase" else "Owner recovery passphrase") }, visualTransformation = PasswordVisualTransformation())
+                TextButton(onClick = {
+                    manager.setupRecovery(recoveryPassword)
+                        .onSuccess { recoveryPassword = ""; notice = "Recovery passphrase configured securely on this installation." }
+                        .onFailure { notice = it.message }
+                }) { Text(if (manager.recoveryConfigured()) "Replace recovery" else "Configure recovery") }
             }
             TextButton(onClick = { backupPending = true }) { Text("Create encrypted backup") }
             TextButton(onClick = { chooseRestore.launch(arrayOf("application/octet-stream", "application/json", "*/*")) }, enabled = !manager.initialized()) { Text("Restore encrypted backup") }
