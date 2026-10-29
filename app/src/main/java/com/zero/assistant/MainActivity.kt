@@ -143,6 +143,11 @@ import com.zero.assistant.data.TorchController
 import com.zero.assistant.core.ShakeSensitivity
 import com.zero.assistant.data.AssistantAiProvider
 import com.zero.assistant.core.ReminderRepository
+import com.zero.assistant.ui.GlassCard
+import com.zero.assistant.ui.ThemeModeSelector
+import com.zero.assistant.ui.ZeroTheme
+import com.zero.assistant.ui.ZeroThemeMode
+import com.zero.assistant.ui.ZeroThemePreferences
 import java.text.DateFormat
 import java.time.ZoneId
 import java.util.Date
@@ -524,6 +529,8 @@ private fun ZeroApp(
     val wakePreferences = remember { context.getSharedPreferences("zero_wake_word", Context.MODE_PRIVATE) }
     val ttsPreferences = remember { context.getSharedPreferences("zero_tts", Context.MODE_PRIVATE) }
     val accessibilityPreferences = remember { context.getSharedPreferences("zero_accessibility", Context.MODE_PRIVATE) }
+    val themePreferences = remember { ZeroThemePreferences(context) }
+    var themeMode by remember { mutableStateOf(themePreferences.mode()) }
     val aiProviderSettings = remember { AiProviderSettings(context) }
     val vaultManager = remember { VaultManager(context) }
     val aiRequestScope = rememberCoroutineScope()
@@ -834,15 +841,7 @@ private fun ZeroApp(
         }
     }
 
-    MaterialTheme(colorScheme = androidx.compose.material3.darkColorScheme(
-        primary = Color.White,
-        onPrimary = Color.Black,
-        secondary = Color(0xFFBDBDBD),
-        background = Paper,
-        surface = Color(0xFF111111),
-        onSurface = Ink,
-        error = Color(0xFFFF6B6B),
-    )) {
+    ZeroTheme(themeMode) {
         if (showIntro) {
             IntroScreen()
         } else {
@@ -964,6 +963,11 @@ private fun ZeroApp(
                     onRequestShakeCameraPermission = {
                         pendingShakePermission.value = true
                         cameraPermission.launch(Manifest.permission.CAMERA)
+                    },
+                    themeMode = themeMode,
+                    onThemeMode = { mode ->
+                        themeMode = mode
+                        themePreferences.setMode(mode)
                     },
                     vaultVisible = vaultVisible,
                     onVaultVisible = { visible ->
@@ -1212,12 +1216,14 @@ private fun HomeScreen(
     val primarySuggestions = HomeSuggestionCatalog.primary
     val moreSuggestions = HomeSuggestionCatalog.more
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(nowMillis)), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Light)
-                Text("${if (batteryStatus.percent in 0..100) "BATTERY ${batteryStatus.percent}%" else "BATTERY UNAVAILABLE"}  ·  ${nextReminder?.let { "NEXT ${it.second}" } ?: "NO UPCOMING REMINDER"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        GlassCard(modifier = Modifier.padding(top = 4.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(nowMillis)), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Light)
+                    Text("${if (batteryStatus.percent in 0..100) "BATTERY ${batteryStatus.percent}%" else "BATTERY UNAVAILABLE"}  ·  ${nextReminder?.let { "NEXT ${it.second}" } ?: "NO UPCOMING REMINDER"}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(if (wakeWordServiceActive) "WAKE ACTIVE" else if (wakeWordEnabled) "WAKE NOT RUNNING" else "WAKE OFF", style = MaterialTheme.typography.labelSmall, color = if (wakeWordServiceActive) Color(0xFF54D7E8) else MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(if (wakeWordServiceActive) "WAKE ACTIVE" else if (wakeWordEnabled) "WAKE NOT RUNNING" else "WAKE OFF", style = MaterialTheme.typography.labelSmall, color = if (wakeWordServiceActive) Color(0xFF54D7E8) else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         AssistantOrb(
             activity = orbActivity,
@@ -1352,6 +1358,8 @@ private fun SettingsScreen(
     onWakeWordEnabled: (Boolean) -> Unit,
     reducedMotion: Boolean,
     onReducedMotion: (Boolean) -> Unit,
+    themeMode: ZeroThemeMode,
+    onThemeMode: (ZeroThemeMode) -> Unit,
     aiProviderSettings: AiProviderSettings,
     onNavigate: (Page) -> Unit,
     onRequestShakeCameraPermission: () -> Unit,
@@ -1382,6 +1390,11 @@ private fun SettingsScreen(
                 Text("ZERO SYSTEM SETTINGS", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                 Text("Local controls · version 17.7.07", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+        GlassCard {
+            Text("Appearance", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+            ThemeModeSelector(themeMode, onThemeMode)
+            Text(if (themeMode == ZeroThemeMode.System) "Selected: System / Default" else "Selected: ${themeMode.label}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         SettingSwitch("Reduce motion", "Keep the orb and suggestion rail static.", reducedMotion, onReducedMotion)
         val speechOutputReady = speechOutputStatus is SpeechOutputStatus.Ready || speechOutputStatus is SpeechOutputStatus.ReadyWithVoice
