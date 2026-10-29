@@ -475,7 +475,7 @@ private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
 }
 
 private data class ChatLine(val fromZero: Boolean, val text: String)
-internal enum class Page { Home, History, Settings, SpeechModels, VoiceStudio, Scanner, Planner, BatteryAlerts, Notes, MyShortcuts, Dashboard, Help, Privacy, Terms, Vault, Emergency, Diagnostics }
+internal enum class Page { Home, History, Settings, SpeechModels, VoiceStudio, Scanner, Planner, BatteryAlerts, Notes, MyShortcuts, LocalUtilities, Dashboard, Help, Privacy, Terms, Vault, Emergency, Diagnostics }
 
 private fun isSpeechError(message: String): Boolean =
     listOf(
@@ -830,6 +830,7 @@ private fun ZeroApp(
                             Page.BatteryAlerts -> "Battery Alerts"
                             Page.Notes -> "Notes"
                             Page.MyShortcuts -> "My Shortcuts"
+                            Page.LocalUtilities -> "Local utilities"
                             Page.Dashboard -> "Privacy & system"
                             Page.Vault -> "ZERO Vault"
                             Page.Emergency -> "Emergency Quick Mode"
@@ -996,6 +997,7 @@ private fun ZeroApp(
                     },
                 )
                 Page.Notes -> NotesScreen(Modifier.padding(padding), noteRepository)
+                Page.LocalUtilities -> LocalUtilitiesScreen(Modifier.padding(padding), noteRepository)
                 Page.MyShortcuts -> MyShortcutsScreen(Modifier.padding(padding), shortcutRepository) { shortcut ->
                     executeShortcut(shortcut, context, dispatchCommand, { message ->
                         lines.add(ChatLine(true, message))
@@ -1373,6 +1375,7 @@ private fun SettingsScreen(
         TextButton(onClick = { onNavigate(Page.BatteryAlerts) }) { Text("Battery Alerts") }
         TextButton(onClick = { onNavigate(Page.Notes) }) { Text("Notes") }
         TextButton(onClick = { onNavigate(Page.MyShortcuts) }) { Text("My Shortcuts") }
+        TextButton(onClick = { onNavigate(Page.LocalUtilities) }) { Text("Local utilities & search") }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,

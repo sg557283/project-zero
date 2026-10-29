@@ -7,7 +7,6 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import com.zero.assistant.BuildConfig
 import com.zero.assistant.core.VaultAttemptState
 import com.zero.assistant.core.VaultSecurity
 import java.io.ByteArrayOutputStream
@@ -70,9 +69,6 @@ class VaultManager(context: Context) {
         masterKey = master
         saveFolders(emptyList())
         saveManifest(emptyList())
-        if (BuildConfig.ZERO_OWNER_RECOVERY_PASSWORD.isNotEmpty()) {
-            setupRecovery(BuildConfig.ZERO_OWNER_RECOVERY_PASSWORD).getOrThrow()
-        }
     }
 
     fun unlock(password: String, nowMillis: Long): Result<Unit> = runCatching {
