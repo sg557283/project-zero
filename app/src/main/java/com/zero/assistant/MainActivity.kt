@@ -17,7 +17,7 @@ import android.content.IntentFilter
 import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
-import androidx.activity.ComponentActivity
+import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -132,6 +132,10 @@ import com.zero.assistant.data.WakeWordService
 import com.zero.assistant.data.WakeWordSettings
 import com.zero.assistant.data.AiProviderSettings
 import com.zero.assistant.data.OpenAiCompatibleProvider
+import com.zero.assistant.data.VaultManager
+import com.zero.assistant.data.HardwareActivationSettings
+import com.zero.assistant.data.DoubleShakeService
+import com.zero.assistant.core.ShakeSensitivity
 import com.zero.assistant.data.AssistantAiProvider
 import com.zero.assistant.core.ReminderRepository
 import java.text.DateFormat
@@ -154,7 +158,7 @@ private val Mint = Color(0xFF202020)
 private val Paper = Color.Black
 private val Ink = Color.White
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     private var speechOutputController: SpeechOutputController? = null
     private val speechOutputStatus = mutableStateOf<SpeechOutputStatus>(SpeechOutputStatus.Initializing)
     private val offlineTtsVoices = mutableStateOf<List<OfflineTtsVoice>>(emptyList())
@@ -467,7 +471,7 @@ private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
 }
 
 private data class ChatLine(val fromZero: Boolean, val text: String)
-internal enum class Page { Home, History, Settings, SpeechModels, Planner, BatteryAlerts, Notes, MyShortcuts, Dashboard, Help, Privacy, Terms }
+internal enum class Page { Home, History, Settings, SpeechModels, Planner, BatteryAlerts, Notes, MyShortcuts, Dashboard, Help, Privacy, Terms, Vault, Emergency, Diagnostics }
 
 private fun isSpeechError(message: String): Boolean =
     listOf(
@@ -516,6 +520,7 @@ private fun ZeroApp(
     val ttsPreferences = remember { context.getSharedPreferences("zero_tts", Context.MODE_PRIVATE) }
     val accessibilityPreferences = remember { context.getSharedPreferences("zero_accessibility", Context.MODE_PRIVATE) }
     val aiProviderSettings = remember { AiProviderSettings(context) }
+    val vaultManager = remember { VaultManager(context) }
     val aiRequestScope = rememberCoroutineScope()
     val noteRepository = remember { NoteRepository(productivityPreferences) }
     val shortcutRepository = remember { ShortcutRepository(productivityPreferences) }
@@ -756,6 +761,12 @@ private fun ZeroApp(
         delay(1_000)
         showIntro = false
     }
+    DisposableEffect(page) {
+        val window = (context as? android.app.Activity)?.window
+        if (page == Page.Vault) window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        else window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+        onDispose { window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE) }
+    }
     LaunchedEffect(voiceCommand) {
         voiceCommand?.let {
             page = Page.Home
@@ -798,6 +809,9 @@ private fun ZeroApp(
                             Page.Notes -> "Notes"
                             Page.MyShortcuts -> "My Shortcuts"
                             Page.Dashboard -> "Privacy & system"
+                            Page.Vault -> "ZERO Vault"
+                            Page.Emergency -> "Emergency Quick Mode"
+                            Page.Diagnostics -> "Self-diagnostics"
                             else -> page.name
                         },
                         fontWeight = FontWeight.Bold,
@@ -970,6 +984,9 @@ private fun ZeroApp(
                     },
                     onNavigate = { navigateTo(it) },
                 )
+                Page.Vault -> VaultScreen(Modifier.padding(padding), vaultManager)
+                Page.Emergency -> EmergencyScreen(Modifier.padding(padding))
+                Page.Diagnostics -> SelfDiagnosticsScreen(Modifier.padding(padding), vaultManager, activeModelId)
                 Page.Help -> TextPage(Modifier.padding(padding), "Help and troubleshooting", "Try commands like:\n\n• Open YouTube / YouTube kholo\n• Torch chalu karo / Torch band karo\n• Abhi kitne baje hain? / battery status\n• note buy milk\n• remind me to call Sam, then set its date and time in Planner\n• planner / notes\n• call followed by a phone number (ZERO asks you to confirm)\n\nTo enable background wake listening, open Settings, enable Background wake listening, and grant microphone and notification permissions. Keep the persistent ZERO notification visible; its Stop action ends microphone use. Enabled phrases are supplied to Vosk as a constrained grammar; recognition depends on the selected model's vocabulary and language.\n\nAndroid and device manufacturers may pause or stop microphone use because of battery management, privacy controls, force-stop, or reboot policy. After reboot, Android requires you to tap a notification and reopen ZERO before microphone capture resumes. Battery optimization guidance opens Android system settings. Speech transcripts and actions are handled locally; unsupported or sensitive commands may require review in ZERO.")
                 Page.Privacy -> TextPage(Modifier.padding(padding), "Privacy and permissions", "Typed commands, command execution, history, speech recognition, notes, reminders, shortcuts, and model inference run on this device. ZERO does not upload commands, audio, notes, reminders, or history; it has no account, analytics, or ads. Local records and downloaded models use app-private storage. ZERO does not retain raw audio.\n\nMicrophone capture starts after you tap Mic or explicitly enable wake listening and grant permission. When enabled, the foreground service continues wake recognition after the Home screen closes and shows a persistent notification. Vosk recognition and wake-phrase grammar matching are local. Hindi recognition is bundled; the optional English model is downloaded from the fixed HTTPS URL and checksum in the catalog. Optional online AI sends only a confirmed text query to the configured provider; microphone audio and local history are not sent.\n\nAndroid may interrupt the foreground service or defer notifications because of battery management, permission changes, force-stop, or reboot policy. After reboot, ZERO requires a user tap before microphone access resumes. Android TTS uses an installed voice that reports it does not require a network connection.")
                 Page.Terms -> TextPage(Modifier.padding(padding), "Terms of Use", "ZERO is provided as-is for personal use. Recognition is processed locally using the selected compatible Vosk model. Speech accuracy depends on language, microphone, device performance, and environment; automatic Hinglish recognition is not promised. Android TTS must have a compatible local voice installed. Optional online AI sends text to a provider only after confirmation and requires the user to configure and trust that provider; the provider's own terms and data handling apply. Reminder delivery is inexact and may be delayed or suppressed by Android power management, notification permission, or force-stop. External app launches, flashlight hardware, and calls depend on the device. ZERO confirms a target number before direct-call permission; if permission or calling is unavailable, it opens the dialer for review.")
@@ -1265,6 +1282,9 @@ private fun SettingsScreen(
     onNavigate: (Page) -> Unit,
 ) {
     val context = LocalContext.current
+    var volumeShortcut by remember { mutableStateOf(HardwareActivationSettings.volumePairEnabled(context)) }
+    var doubleShake by remember { mutableStateOf(HardwareActivationSettings.doubleShakeEnabled(context)) }
+    var shakeSensitivity by remember { mutableStateOf(HardwareActivationSettings.shakeSensitivity(context)) }
     var editingPhraseId by remember { mutableStateOf<String?>(null) }
     var phraseDraft by remember { mutableStateOf("") }
     var phraseEditorVisible by remember { mutableStateOf(false) }
@@ -1305,6 +1325,9 @@ private fun SettingsScreen(
         TextButton(onClick = { onNavigate(Page.BatteryAlerts) }) { Text("Battery Alerts") }
         TextButton(onClick = { onNavigate(Page.Notes) }) { Text("Notes") }
         TextButton(onClick = { onNavigate(Page.MyShortcuts) }) { Text("My Shortcuts") }
+        TextButton(onClick = { onNavigate(Page.Vault) }) { Text("ZERO Vault") }
+        TextButton(onClick = { onNavigate(Page.Emergency) }) { Text("Emergency Quick Mode") }
+        TextButton(onClick = { onNavigate(Page.Diagnostics) }) { Text("Self-diagnostics") }
         TextButton(onClick = { onNavigate(Page.Dashboard) }) { Text("Privacy & system dashboard") }
         Text("Text-to-speech language", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1427,6 +1450,28 @@ private fun SettingsScreen(
         }
         Text("The key is encrypted with Android Keystore, but secrets used by a distributed app cannot be guaranteed safe from extraction. Enter only a provider endpoint and key you trust; ZERO sends text only after confirmation and never sends microphone audio.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         aiSettingsMessage?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+        Text("Hardware activation", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+        SettingSwitch("Volume Up + Volume Down shortcut", "Optional accessibility key-event shortcut. Turn it on here, then enable ZERO in Android Accessibility settings. Ordinary volume presses are not consumed; the Volume Up + Volume Down accessibility shortcut remains system-controlled.", volumeShortcut, { enabled ->
+            volumeShortcut = enabled
+            HardwareActivationSettings.setVolumePairEnabled(context, enabled)
+            if (enabled) context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        })
+        SettingSwitch("Double-shake flashlight", "Requires an accelerometer and torch. Uses a visible foreground notification while running.", doubleShake, { enabled ->
+            HardwareActivationSettings.setDoubleShakeEnabled(context, enabled)
+            doubleShake = enabled
+            val shakeIntent = Intent(context, DoubleShakeService::class.java).setAction(if (enabled) DoubleShakeService.ACTION_START else DoubleShakeService.ACTION_STOP)
+            runCatching {
+                if (enabled) ContextCompat.startForegroundService(context, shakeIntent) else context.startService(shakeIntent)
+            }
+        })
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ShakeSensitivity.values().forEach { sensitivity ->
+                FilterChip(selected = shakeSensitivity == sensitivity, onClick = {
+                    shakeSensitivity = sensitivity
+                    HardwareActivationSettings.setShakeSensitivity(context, sensitivity)
+                }, label = { Text(sensitivity.name.lowercase().replaceFirstChar { it.titlecase(Locale.ROOT) }) })
+            }
+        }
         Text("Settings shortcuts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
         TextButton(onClick = { onNavigate(Page.Help) }) { Text("Help and Troubleshooting") }
         TextButton(onClick = { onNavigate(Page.Privacy) }) { Text("Privacy and Permissions") }

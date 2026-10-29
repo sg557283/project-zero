@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="zero_accessibility_service_description">ZERO can listen for a deliberate simultaneous Volume Up and Volume Down press to activate its existing voice assistant. It does not read screen content or ordinary accessibility events.</string>
+</resources>
