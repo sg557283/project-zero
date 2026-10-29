@@ -62,6 +62,7 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
     var restorePassword by remember { mutableStateOf("") }
     var ownerGestureTaps by remember { mutableStateOf(0) }
     var ownerAccessDialog by remember { mutableStateOf(false) }
+    var ownerVaultPassword by remember { mutableStateOf("") }
     val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { destination ->
         if (destination != null) manager.createEncryptedBackup(destination, recoveryPhrase)
             .onSuccess { notice = "Encrypted backup created. Store the recovery phrase separately." }
@@ -187,11 +188,34 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
                                                 label = { Text("Passphrase") },
                                                 visualTransformation = PasswordVisualTransformation(),
                                             )
+                                            if (!manager.initialized()) {
+                                                OutlinedTextField(
+                                                    ownerVaultPassword,
+                                                    { ownerVaultPassword = it },
+                                                    Modifier.fillMaxWidth(),
+                                                    label = { Text("User Vault password") },
+                                                    visualTransformation = PasswordVisualTransformation(),
+                                                )
+                                            }
                                         }
                                     },
                                     confirmButton = {
                                         TextButton(onClick = {
-                                            if (unlocked || !manager.recoveryConfigured()) {
+                                            if (!manager.initialized()) {
+                                                manager.initialize(ownerVaultPassword)
+                                                    .onSuccess {
+                                                        if (manager.setupRecovery(recoveryPassword).isSuccess) {
+                                                            unlocked = true
+                                                            ownerVaultPassword = ""
+                                                            recoveryPassword = ""
+                                                            ownerAccessDialog = false
+                                                            notice = "Vault and owner access configured."
+                                                        } else {
+                                                            notice = manager.setupRecovery(recoveryPassword).exceptionOrNull()?.message
+                                                        }
+                                                    }
+                                                    .onFailure { notice = it.message }
+                                            } else if (unlocked || !manager.recoveryConfigured()) {
                                                 manager.setupRecovery(recoveryPassword)
                                                     .onSuccess {
                                                         recoveryPassword = ""
