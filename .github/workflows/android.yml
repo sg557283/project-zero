@@ -36,6 +36,8 @@ jobs:
 
       - name: Run tests, lint, and package debug ZIP
         run: ./gradlew testDebugUnitTest lintDebug packageDebugZip
+        env:
+          ZERO_OWNER_RECOVERY_PASSWORD: ${{ secrets.ZERO_OWNER_RECOVERY_PASSWORD }}
 
       - name: Upload Zero-Assistant APK
         uses: actions/upload-artifact@v4

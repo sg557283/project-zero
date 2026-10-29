@@ -17,6 +17,10 @@ plugins {
 android {
     namespace = "com.zero.assistant"
     compileSdk = 36
+    val ownerRecoveryPassword = providers.environmentVariable("ZERO_OWNER_RECOVERY_PASSWORD").orElse("")
+        .get()
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
 
     defaultConfig {
         applicationId = "com.zero.assistant"
@@ -26,12 +30,13 @@ android {
         versionName = "17.7.07"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "ZERO_OWNER_RECOVERY_PASSWORD", "\"$ownerRecoveryPassword\"")
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
