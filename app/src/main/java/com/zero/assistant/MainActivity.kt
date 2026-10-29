@@ -139,6 +139,7 @@ import com.zero.assistant.data.VaultManager
 import com.zero.assistant.data.HardwareActivationSettings
 import com.zero.assistant.core.VaultVisibility
 import com.zero.assistant.data.DoubleShakeService
+import com.zero.assistant.data.TorchController
 import com.zero.assistant.core.ShakeSensitivity
 import com.zero.assistant.data.AssistantAiProvider
 import com.zero.assistant.core.ReminderRepository
@@ -721,6 +722,24 @@ private fun ZeroApp(
 
     dispatchCommand = { command, onComplete ->
         when (val parsed = CommandParser.parse(command)) {
+            is AssistantCommand.OpenSystemSettings -> {
+                val response = openSettingsTarget(context, parsed.target)
+                showResult(command, response); onComplete?.invoke()
+            }
+            is AssistantCommand.OpenApp -> {
+                when (parsed.app) {
+                    AppTarget.Scanner -> navigateTo(Page.Scanner)
+                    AppTarget.Notes -> navigateTo(Page.Notes)
+                    AppTarget.Vault -> navigateTo(Page.Vault)
+                    else -> Unit
+                }
+                if (parsed.app in listOf(AppTarget.Scanner, AppTarget.Notes, AppTarget.Vault)) {
+                    showResult(command, "Opening ${parsed.app.name}."); onComplete?.invoke()
+                } else {
+                    val response = openApp(context, parsed.app)
+                    showResult(command, response); onComplete?.invoke()
+                }
+            }
             is AssistantCommand.CallNumber -> pendingCallNumber = parsed.number
             is AssistantCommand.SearchYouTube -> {
                 val response = openYouTubeSearch(context, parsed.query)
@@ -747,6 +766,17 @@ private fun ZeroApp(
             AssistantCommand.ShowPlanner -> { navigateTo(Page.Planner); showResult(command, "Showing your planner."); onComplete?.invoke() }
             AssistantCommand.ShowNotes -> { navigateTo(Page.Notes); showResult(command, "Showing your notes."); onComplete?.invoke() }
             AssistantCommand.Identity -> { showResult(command, AssistantIdentity.RESPONSE); onComplete?.invoke() }
+            AssistantCommand.ToggleFlashlight -> if (
+                ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
+            ) {
+                pendingFlashlightCommand = "torch"
+                pendingShortcutContinuation = onComplete
+                cameraPermission.launch(Manifest.permission.CAMERA)
+            } else {
+                val response = toggleFlashlight(context)
+                showResult(command, response)
+                onComplete?.invoke()
+            }
             is AssistantCommand.SetFlashlight -> if (
                 ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
             ) {
@@ -1629,8 +1659,15 @@ private fun executeCommand(
     val command = CommandParser.parse(input)
     val response = when (command) {
         AssistantCommand.Identity -> AssistantIdentity.RESPONSE
-        is AssistantCommand.OpenApp -> openApp(context, command.app)
+        is AssistantCommand.OpenSystemSettings -> openSettingsTarget(context, command.target)
+        is AssistantCommand.OpenApp -> when (command.app) {
+            AppTarget.Scanner -> "ZERO Scanner is available from this command, but the action button is opening the screen."
+            AppTarget.Notes -> "ZERO Notes are available from this command, but the action button is opening the screen."
+            AppTarget.Vault -> "ZERO Vault is available from this command, but authentication is required."
+            else -> openApp(context, command.app)
+        }
         is AssistantCommand.SetFlashlight -> setFlashlight(context, command.enabled)
+        AssistantCommand.ToggleFlashlight -> toggleFlashlight(context)
         is AssistantCommand.CallNumber -> callNumber(context, command.number, allowDirectCall)
         is AssistantCommand.SearchYouTube -> openYouTubeSearch(context, command.query)
         is AssistantCommand.DraftWhatsAppMessage -> "Review and confirm the WhatsApp message before opening its draft."
@@ -1738,6 +1775,9 @@ private fun openSettingsTarget(context: Context, target: String): String {
         "display" -> Settings.ACTION_DISPLAY_SETTINGS
         "accessibility" -> Settings.ACTION_ACCESSIBILITY_SETTINGS
         "text_to_speech" -> "com.android.settings.TTS_SETTINGS"
+        "hotspot" -> Settings.ACTION_WIRELESS_SETTINGS
+        "dnd" -> Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS
+        "battery_saver" -> Settings.ACTION_BATTERY_SAVER_SETTINGS
         else -> return "That Settings screen is not supported."
     }
     return try {
@@ -1771,8 +1811,15 @@ private fun openApp(context: Context, app: AppTarget): String {
     val intent = when (app) {
         AppTarget.Settings -> Intent(Settings.ACTION_SETTINGS)
         AppTarget.Camera -> Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-        AppTarget.YouTube -> launcherIntent(context, "com.google.android.youtube")
+        AppTarget.YouTube -> launcherIntent(context, "com.google.android.youtube") ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://youtube.com")).addCategory(Intent.CATEGORY_BROWSABLE)
         AppTarget.WhatsApp -> launcherIntent(context, "com.whatsapp")
+        AppTarget.Music -> launcherIntent(context, "com.google.android.music") ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://music.youtube.com")).addCategory(Intent.CATEGORY_BROWSABLE)
+        AppTarget.Maps -> launcherIntent(context, "com.google.android.apps.maps") ?: Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0"))
+        AppTarget.Browser -> Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com"))
+        AppTarget.Phone -> Intent(Intent.ACTION_DIAL)
+        AppTarget.Messages -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_MESSAGING)
+        AppTarget.Calculator -> launcherIntent(context, "com.google.android.calculator") ?: launcherIntent(context, "com.android.calculator2")
+        AppTarget.Scanner, AppTarget.Notes, AppTarget.Vault -> null
     } ?: return "That app isn't available on this device."
     if (intent.resolveActivity(context.packageManager) == null) return "That app isn't available on this device."
 
@@ -1790,6 +1837,17 @@ private fun openApp(context: Context, app: AppTarget): String {
 private fun launcherIntent(context: Context, packageName: String): Intent? =
     context.packageManager.getLaunchIntentForPackage(packageName)
 
+private fun toggleFlashlight(context: Context): String = TorchController.toggle(context).fold(
+    onSuccess = { enabled -> if (enabled) "Flashlight is on." else "Flashlight is off." },
+    onFailure = { failure ->
+        when (failure) {
+            is SecurityException -> "Camera permission is required to control the flashlight."
+            is android.hardware.camera2.CameraAccessException -> "Flashlight hardware is busy or unavailable."
+            else -> failure.message ?: "Flashlight state could not be changed."
+        }
+    },
+)
+
 private fun setFlashlight(context: Context, enabled: Boolean): String {
     if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
         return "Camera permission is needed to control the flashlight. Use the Torch shortcut to grant it."
@@ -1800,8 +1858,10 @@ private fun setFlashlight(context: Context, enabled: Boolean): String {
     return try {
         val cameraId = cameraManager.cameraIdList.firstOrNull { cameraManager.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
             ?: return "This device doesn't have a flashlight."
-        cameraManager.setTorchMode(cameraId, enabled)
-        if (enabled) "Flashlight is on." else "Flashlight is off."
+        TorchController.set(context, enabled).fold(
+            onSuccess = { current -> if (current) "Flashlight is on." else "Flashlight is off." },
+            onFailure = { "I couldn't control the flashlight: ${it.message ?: "hardware unavailable"}." },
+        )
     } catch (_: SecurityException) {
         "I couldn't control the flashlight because camera access was denied."
     } catch (_: CameraAccessException) {

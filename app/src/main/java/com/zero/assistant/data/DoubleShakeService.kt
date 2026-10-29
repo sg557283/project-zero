@@ -22,6 +22,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.zero.assistant.MainActivity
 import com.zero.assistant.R
 import com.zero.assistant.core.DoubleShakeDetector
+import com.zero.assistant.data.TorchController
 
 class DoubleShakeService : Service(), SensorEventListener {
     companion object {
@@ -70,14 +71,7 @@ class DoubleShakeService : Service(), SensorEventListener {
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
     private fun toggleTorch() {
-        val id = torchCameraId ?: return
-        val camera = getSystemService(CameraManager::class.java) ?: return
-        handler.post {
-            runCatching {
-                torchEnabled = !torchEnabled
-                camera.setTorchMode(id, torchEnabled)
-            }.onFailure { torchEnabled = false }
-        }
+        TorchController.toggle(this).onSuccess { torchEnabled = it }.onFailure { torchEnabled = false }
     }
 
     private fun startForegroundNotification() {

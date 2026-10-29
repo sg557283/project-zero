@@ -30,6 +30,7 @@ import com.zero.assistant.core.AssistantCommand
 import com.zero.assistant.core.CommandParser
 import com.zero.assistant.core.AssistantIdentity
 import com.zero.assistant.core.WakeWord
+import com.zero.assistant.data.TorchController
 import org.json.JSONArray
 import org.json.JSONObject
 import org.vosk.Model
@@ -289,6 +290,11 @@ class WakeWordService : Service() {
             AssistantCommand.Identity -> respondAndResume(AssistantIdentity.RESPONSE)
             AssistantCommand.TellTime -> respondAndResume("It is ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}.")
             AssistantCommand.BatteryStatus -> respondAndResume(readBatteryStatus())
+            AssistantCommand.ToggleFlashlight -> {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                    requestForegroundReview(text, "Camera permission is needed. Tap the ZERO notification to review this command.")
+                } else respondAndResume(toggleFlashlight())
+            }
             is AssistantCommand.SetFlashlight -> {
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                     requestForegroundReview(text, "Camera permission is needed. Tap the ZERO notification to review this command.")
@@ -444,18 +450,15 @@ class WakeWordService : Service() {
         updateNotification("Listening for wake phrases. Tap the command notification to review the captured request.")
     }
 
-    private fun setFlashlight(enabled: Boolean): String {
-        val camera = getSystemService(CameraManager::class.java) ?: return "Camera service is unavailable."
-        return try {
-            val id = camera.cameraIdList.firstOrNull {
-                camera.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
-            } ?: return "This device has no flashlight."
-            camera.setTorchMode(id, enabled)
-            if (enabled) "Flashlight turned on." else "Flashlight turned off."
-        } catch (_: Exception) {
-            "Android could not change flashlight state."
-        }
-    }
+    private fun toggleFlashlight(): String = TorchController.toggle(this).fold(
+        onSuccess = { if (it) "Flashlight turned on." else "Flashlight turned off." },
+        onFailure = { it.message ?: "Flashlight state could not be changed." },
+    )
+
+    private fun setFlashlight(enabled: Boolean): String = TorchController.set(this, enabled).fold(
+        onSuccess = { if (it) "Flashlight turned on." else "Flashlight turned off." },
+        onFailure = { it.message ?: "Android could not change flashlight state." },
+    )
 
     private fun readBatteryStatus(): String {
         val manager = getSystemService(BatteryManager::class.java) ?: return "Battery status is unavailable."

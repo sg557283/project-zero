@@ -27,7 +27,25 @@ class CommandParserTest {
         assertEquals(AssistantCommand.SetFlashlight(false), CommandParser.parse("Torch band karo"))
         assertEquals(AssistantCommand.SetFlashlight(true), CommandParser.parse("Turn flashlight on"))
         assertEquals(AssistantCommand.SetFlashlight(false), CommandParser.parse("Turn flashlight off"))
-        assertEquals(AssistantCommand.Unsupported, CommandParser.parse("flashlight"))
+        assertEquals(AssistantCommand.ToggleFlashlight, CommandParser.parse("flashlight"))
+        assertEquals(AssistantCommand.ToggleFlashlight, CommandParser.parse("टॉर्च"))
+    }
+
+    @Test fun parsesBareSupportedAppNames() {
+        assertEquals(AssistantCommand.OpenApp(AppTarget.YouTube), CommandParser.parse("YouTube"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Music), CommandParser.parse("music"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Calculator), CommandParser.parse("calculator"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Scanner), CommandParser.parse("scanner"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Vault), CommandParser.parse("Vault"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Settings), CommandParser.parse("settings"))
+    }
+
+    @Test fun toggleStateAndDuplicateRulesAreSafe() {
+        assertEquals(true, UniversalCommandActions.toggleFlashlight(false))
+        assertEquals(false, UniversalCommandActions.toggleFlashlight(true))
+        assertEquals(null, UniversalCommandActions.toggleFlashlight(null))
+        assertEquals(false, UniversalCommandActions.shouldExecute("torch", "torch", 1_000L, 0L, 1_500L))
+        assertEquals(true, UniversalCommandActions.shouldExecute("torch", "torch", 2_000L, 0L, 1_500L))
     }
 
     @Test fun parsesTimeInEnglishAndHinglish() {

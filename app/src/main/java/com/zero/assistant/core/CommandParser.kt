@@ -4,6 +4,8 @@ sealed interface AssistantCommand {
     data object Identity : AssistantCommand
     data class OpenApp(val app: AppTarget) : AssistantCommand
     data class SetFlashlight(val enabled: Boolean) : AssistantCommand
+    data object ToggleFlashlight : AssistantCommand
+    data class OpenSystemSettings(val target: String) : AssistantCommand
     data class CallNumber(val number: String) : AssistantCommand
     data class SearchYouTube(val query: String) : AssistantCommand
     data class DraftWhatsAppMessage(val contact: String, val message: String) : AssistantCommand
@@ -21,8 +23,17 @@ sealed interface AssistantCommand {
 enum class AppTarget {
     YouTube,
     WhatsApp,
+    Music,
+    Maps,
+    Browser,
+    Phone,
+    Messages,
+    Calculator,
     Camera,
     Settings,
+    Scanner,
+    Notes,
+    Vault,
 }
 
 object AssistantIdentity {
@@ -71,6 +82,12 @@ object CommandParser {
             .replace(Regex("\\s+"), " ")
         if (text.isBlank()) return AssistantCommand.Unsupported
 
+        if (text in setOf("wifi", "wi fi", "वाईफाई", "वाई फाई")) return AssistantCommand.OpenSystemSettings("wifi")
+        if (text in setOf("bluetooth", "ब्लूटूथ", "ब्लू टूथ")) return AssistantCommand.OpenSystemSettings("bluetooth")
+        if (text in setOf("hotspot", "tethering", "हॉटस्पॉट")) return AssistantCommand.OpenSystemSettings("hotspot")
+        if (text in setOf("dnd", "do not disturb", "do not disturb mode", "परेशान न करें")) return AssistantCommand.OpenSystemSettings("dnd")
+        if (text in setOf("auto rotate", "autorotate", "ऑटो रोटेट")) return AssistantCommand.OpenSystemSettings("display")
+        if (text in setOf("battery saver", "power saver", "बैटरी सेवर्स", "बैटरी सेविंग")) return AssistantCommand.OpenSystemSettings("battery_saver")
         if (timePhrases.any(text::contains)) return AssistantCommand.TellTime
         if (batteryPhrases.any(text::contains)) return AssistantCommand.BatteryStatus
         if (listOf("show reminders", "reminders", "show tasks", "today's tasks", "today s tasks", "planner", "योजनाएं", "याद दिलाने").any(text::contains)) return AssistantCommand.ShowPlanner
@@ -84,16 +101,29 @@ object CommandParser {
         if (listOf("torch", "flashlight", "flash light", "टॉर्च", "फ्लैशलाइट").any(text::contains)) {
             if (wantsOff) return AssistantCommand.SetFlashlight(false)
             if (wantsOn) return AssistantCommand.SetFlashlight(true)
+            if (listOf("torch", "flashlight", "flash light", "टॉर्च", "फ्लैशलाइट").any { text == it }) return AssistantCommand.ToggleFlashlight
         }
 
         val app = when {
             listOf("youtube", "you tube", "यूट्यूब").any(text::contains) -> AppTarget.YouTube
             listOf("whatsapp", "whats app", "व्हाट्सएप", "व्हाट्सऐप").any(text::contains) -> AppTarget.WhatsApp
+            listOf("music", "gaana", "संगीत", "गाना").any(text::contains) -> AppTarget.Music
+            listOf("maps", "map", "नक्शा", "मैप्स").any(text::contains) -> AppTarget.Maps
+            listOf("browser", "chrome", "ब्राउज़र").any(text::contains) -> AppTarget.Browser
+            listOf("phone", "dialer", "फोन", "डायलर").any(text::contains) -> AppTarget.Phone
+            listOf("messages", "message", "sms", "संदेश").any(text::contains) -> AppTarget.Messages
+            listOf("calculator", "calc", "कैल्कुलेटर").any(text::contains) -> AppTarget.Calculator
             listOf("camera", "camra", "कैमरा").any(text::contains) -> AppTarget.Camera
+            listOf("scanner", "scan", "स्कैनर", "स्कैनर").any(text::contains) -> AppTarget.Scanner
+            listOf("notes", "note", "नोट्स", "नोट").any(text::contains) -> AppTarget.Notes
+            listOf("vault", "zero vault", "वाल्ट").any(text::contains) -> AppTarget.Vault
             listOf("settings", "सेटिंग्स", "सेटिंग").any(text::contains) -> AppTarget.Settings
             else -> null
         }
-        if (app != null && listOf("open", "launch", "kholo", "khol", "chalao", "start", "खोलो", "खोल").any(text::contains)) {
+        if (app != null && (
+            listOf("open", "launch", "kholo", "khol", "chalao", "start", "खोलो", "खोल").any(text::contains) ||
+            text in setOf("youtube", "you tube", "यूट्यूब", "whatsapp", "whats app", "व्हाट्सएप", "व्हाट्सऐप", "music", "gaana", "संगीत", "गाना", "maps", "map", "browser", "chrome", "phone", "dialer", "messages", "sms", "calculator", "calc", "camera", "camra", "कैमरा", "scanner", "scan", "settings", "सेटिंग्स", "vault", "zero vault", "notes", "note", "नोट")
+        )) {
             return AssistantCommand.OpenApp(app)
         }
 
