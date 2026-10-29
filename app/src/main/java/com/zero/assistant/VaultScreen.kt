@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -59,6 +60,8 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
     var backupPending by remember { mutableStateOf(false) }
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
     var restorePassword by remember { mutableStateOf("") }
+    var ownerGestureTaps by remember { mutableStateOf(0) }
+    var ownerAccessDialog by remember { mutableStateOf(false) }
     val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { destination ->
         if (destination != null) manager.createEncryptedBackup(destination, recoveryPhrase)
             .onSuccess { notice = "Encrypted backup created. Store the recovery phrase separately." }
@@ -116,7 +119,18 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
         }).authenticate(promptInfo)
     }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("ZERO Vault", style = androidx.compose.material3.MaterialTheme.typography.titleLarge)
+        Text(
+            "ZERO Vault",
+            modifier = Modifier.combinedClickable(
+                onClick = { ownerGestureTaps++ },
+                onLongClick = { ownerAccessDialog = true; ownerGestureTaps = 0 },
+            ),
+            style = androidx.compose.material3.MaterialTheme.typography.titleLarge,
+        )
+        if (ownerGestureTaps >= 7) {
+            ownerAccessDialog = true
+            ownerGestureTaps = 0
+        }
         Text("Local encrypted storage. No cloud synchronization or account is used.")
         if (!manager.initialized()) {
             OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("New Vault password") }, visualTransformation = PasswordVisualTransformation())
@@ -125,24 +139,10 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
             Button(onClick = { authenticate { unlocked = manager.unlockWithDeviceCredential(); if (!unlocked) notice = "Device authentication succeeded, but Vault storage could not be unlocked." } }) { Text("Unlock with device authentication") }
             OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("Vault password") }, visualTransformation = PasswordVisualTransformation())
             Button(onClick = { manager.unlock(password, System.currentTimeMillis()).onSuccess { unlocked = true; password = ""; notice = null }.onFailure { notice = it.message } }) { Text("Unlock with password") }
-            if (manager.recoveryConfigured()) {
-                OutlinedTextField(recoveryPassword, { recoveryPassword = it }, Modifier.fillMaxWidth(), label = { Text("Owner recovery passphrase") }, visualTransformation = PasswordVisualTransformation())
-                TextButton(onClick = {
-                    manager.unlockWithRecovery(recoveryPassword)
-                        .onSuccess { unlocked = true; recoveryPassword = ""; notice = "Unlocked with owner recovery." }
-                        .onFailure { notice = it.message }
-                }) { Text("Unlock with recovery") }
-            }
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { importFile.launch(arrayOf("image/*", "video/*", "application/pdf", "text/*", "application/*")) }) { Text("Import") }
                 TextButton(onClick = { manager.lock(); unlocked = false; password = "" }) { Text("Lock") }
-                OutlinedTextField(recoveryPassword, { recoveryPassword = it }, Modifier.fillMaxWidth(), label = { Text(if (manager.recoveryConfigured()) "Replace owner recovery passphrase" else "Owner recovery passphrase") }, visualTransformation = PasswordVisualTransformation())
-                TextButton(onClick = {
-                    manager.setupRecovery(recoveryPassword)
-                        .onSuccess { recoveryPassword = ""; notice = "Recovery passphrase configured securely on this installation." }
-                        .onFailure { notice = it.message }
-                }) { Text(if (manager.recoveryConfigured()) "Replace recovery" else "Configure recovery") }
             }
             TextButton(onClick = { backupPending = true }) { Text("Create encrypted backup") }
             TextButton(onClick = { chooseRestore.launch(arrayOf("application/octet-stream", "application/json", "*/*")) }, enabled = !manager.initialized()) { Text("Restore encrypted backup") }
@@ -172,6 +172,47 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 TextButton(onClick = { manager.restore(file).onSuccess { refresh++ }.onFailure { notice = it.message } }) { Text("Restore") }
                                 TextButton(onClick = { permanentFile = file }) { Text("Delete permanently") }
+                            }
+
+                            if (ownerAccessDialog) {
+                                AlertDialog(
+                                    onDismissRequest = { ownerAccessDialog = false; recoveryPassword = "" },
+                                    title = { Text("Owner access") },
+                                    text = {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            OutlinedTextField(
+                                                recoveryPassword,
+                                                { recoveryPassword = it },
+                                                Modifier.fillMaxWidth(),
+                                                label = { Text("Passphrase") },
+                                                visualTransformation = PasswordVisualTransformation(),
+                                            )
+                                        }
+                                    },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            if (unlocked || !manager.recoveryConfigured()) {
+                                                manager.setupRecovery(recoveryPassword)
+                                                    .onSuccess {
+                                                        recoveryPassword = ""
+                                                        ownerAccessDialog = false
+                                                        notice = "Owner access configured."
+                                                    }
+                                                    .onFailure { notice = it.message }
+                                            } else {
+                                                manager.unlockWithRecovery(recoveryPassword)
+                                                    .onSuccess {
+                                                        recoveryPassword = ""
+                                                        ownerAccessDialog = false
+                                                        unlocked = true
+                                                        notice = "Owner access successful."
+                                                    }
+                                                    .onFailure { notice = it.message }
+                                            }
+                                        }) { Text("Continue") }
+                                    },
+                                    dismissButton = { TextButton(onClick = { ownerAccessDialog = false; recoveryPassword = "" }) { Text("Cancel") } },
+                                )
                             }
                         }
                     }
