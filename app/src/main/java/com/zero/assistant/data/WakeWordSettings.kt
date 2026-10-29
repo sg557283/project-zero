@@ -10,6 +10,7 @@ import org.json.JSONObject
 
 object WakeWordSettings {
     const val ACTION_START = "com.zero.assistant.action.START_WAKE_WORD"
+    const val ACTION_ACTIVATE = "com.zero.assistant.action.ACTIVATE_ZERO"
     const val ACTION_STOP = "com.zero.assistant.action.STOP_WAKE_WORD"
     const val ACTION_COMMAND = "com.zero.assistant.action.REVIEW_VOICE_COMMAND"
     const val EXTRA_COMMAND = "com.zero.assistant.extra.VOICE_COMMAND"

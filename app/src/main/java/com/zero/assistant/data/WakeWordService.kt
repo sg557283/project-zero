@@ -44,6 +44,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
@@ -101,6 +102,9 @@ class WakeWordService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == WakeWordSettings.ACTION_ACTIVATE) {
+            WakeWordSettings.setEnabled(this, true)
+        }
         if (intent?.action == WakeWordSettings.ACTION_STOP) {
             WakeWordSettings.setEnabled(this, false)
             stopListeningService()
@@ -143,7 +147,8 @@ class WakeWordService : Service() {
         manager.ensureBundledModel()
         serviceScope.launch {
             try {
-                val modelId = manager.activeModelId.first { it != null }
+                val modelId = withTimeoutOrNull(MODEL_LOAD_TIMEOUT_MS) { manager.activeModelId.first { it != null } }
+                    ?: throw IllegalStateException("No offline model became active within ${MODEL_LOAD_TIMEOUT_MS / 1000} seconds.")
                 if (!serviceRunning) return@launch
                 manager.loadActiveModel { result ->
                     result.fold(
@@ -374,10 +379,18 @@ class WakeWordService : Service() {
         speaking = true
         speechContinuation = continuation
         val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, TTS_UTTERANCE_ID)
-        if (result != TextToSpeech.SUCCESS) completeSpeech()
+        if (result != TextToSpeech.SUCCESS) {
+            completeSpeech()
+        } else {
+            handler.removeCallbacks(speechWatchdog)
+            handler.postDelayed(speechWatchdog, SPEECH_WATCHDOG_MS)
+        }
     }
 
+    private val speechWatchdog = Runnable { completeSpeech() }
+
     private fun completeSpeech() {
+        handler.removeCallbacks(speechWatchdog)
         handler.post {
             if (!serviceRunning) return@post
             speaking = false
@@ -591,6 +604,8 @@ class WakeWordService : Service() {
     private companion object {
         const val SAMPLE_RATE_HZ = 16_000f
         const val RESTART_DELAY_MS = 1_500L
+        const val MODEL_LOAD_TIMEOUT_MS = 15_000L
+        const val SPEECH_WATCHDOG_MS = 8_000L
         const val COMMAND_CAPTURE_TIMEOUT_MS = 10_000
         const val WAKE_DEBOUNCE_MS = 2_500L
         const val DUPLICATE_WINDOW_MS = 1_500L

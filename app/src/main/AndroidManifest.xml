@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
@@ -58,6 +59,19 @@
             android:exported="false"
             android:stopWithTask="false"
             android:foregroundServiceType="microphone" />
+        <service
+            android:name=".data.DoubleShakeService"
+            android:exported="false"
+            android:foregroundServiceType="camera" />
+        <service
+            android:name=".data.VolumeAccessibilityService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/zero_accessibility_service" />
+        </service>
         <receiver
             android:name=".data.WakeWordBootReceiver"
             android:enabled="true"
