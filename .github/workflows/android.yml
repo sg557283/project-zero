@@ -37,9 +37,9 @@ jobs:
       - name: Run tests, lint, and package debug ZIP
         run: ./gradlew testDebugUnitTest lintDebug packageDebugZip
 
-      - name: Upload Zero-Assistant.zip
+      - name: Upload Zero-Assistant APK
         uses: actions/upload-artifact@v4
         with:
-          name: Zero-Assistant.zip
-          path: app/build/downloadable/Zero-Assistant.zip
+          name: Zero-Assistant
+          path: app/build/downloadable/Zero-Assistant.apk
           if-no-files-found: error
