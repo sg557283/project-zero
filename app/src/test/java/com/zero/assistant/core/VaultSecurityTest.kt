@@ -25,10 +25,11 @@ class VaultSecurityTest {
         assertFalse(saltA.contentEquals(saltB))
     }
 
-    @Test fun strongPasswordRequiresLetterAndNumber() {
-        assertTrue(VaultSecurity.validatePassword("abcdefghijkl") != null)
-        assertTrue(VaultSecurity.validatePassword("123456789012") != null)
-        assertEquals(null, VaultSecurity.validatePassword("ZeroAssist2026"))
+    @Test fun passwordNeedsFourCharactersButAllowsLettersNumbersAndSymbols() {
+        assertTrue(VaultSecurity.validatePassword("abc") != null)
+        assertEquals(null, VaultSecurity.validatePassword("a1!x"))
+        assertEquals(null, VaultSecurity.validatePassword("!@#$"))
+        assertEquals(null, VaultSecurity.validatePassword("1234"))
     }
 
     @Test fun sessionExpiresAfterConfiguredTimeout() {

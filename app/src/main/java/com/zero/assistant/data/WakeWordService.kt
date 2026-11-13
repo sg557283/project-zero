@@ -233,7 +233,8 @@ class WakeWordService : Service() {
                     val phraseText = enabledPhrases.joinToString(", ") { it.phrase }
                     updateNotification("Listening for $phraseText using ${activeModelId ?: "the local model"}.")
                 } else {
-                    updateNotification("I am here. Say your command now.")
+                    updateNotification("Yes boss. Say your command now.")
+                    WakeWordSettings.updateAssistantPanel(this, "Listening. Say your command now.")
                 }
                 true
             }
@@ -266,6 +267,7 @@ class WakeWordService : Service() {
         if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
         lastWakeAt = now
         WakeWordSettings.recordDetection(this)
+        WakeWordSettings.updateAssistantPanel(this, "Wake phrase recognized. ZERO is getting ready.")
         beginCommandSession(match.second.command)
     }
 
@@ -275,7 +277,7 @@ class WakeWordService : Service() {
         transitioningFromWake = true
         stopCapture()
         updateNotification("Wake phrase heard. Preparing command capture.")
-        speakThen("I am here.") {
+        speakThen("Yes boss.") {
             transitioningFromWake = false
             if (commandAfterWake.isNotBlank()) handleCapturedCommand(commandAfterWake)
             else if (!startCapture(commandMode = true)) handleCommandTimeout()
@@ -286,6 +288,7 @@ class WakeWordService : Service() {
         if (!serviceRunning || !awaitingCommand) return
         awaitingCommand = false
         stopCapture()
+        WakeWordSettings.updateAssistantPanel(this, "Thinking about your command…")
         when (val command = CommandParser.parse(text)) {
             AssistantCommand.Identity -> respondAndResume(AssistantIdentity.RESPONSE)
             AssistantCommand.TellTime -> respondAndResume("It is ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}.")
@@ -310,6 +313,7 @@ class WakeWordService : Service() {
         transitioningFromWake = true
         stopCapture()
         updateNotification("No command was recognized. Returning to wake listening.")
+        WakeWordSettings.updateAssistantPanel(this, "I didn't catch that. Say the command again.", 6_000L)
         speakThen("I didn't catch that. Please try again.") {
             transitioningFromWake = false
             startCapture(commandMode = false)
@@ -318,8 +322,9 @@ class WakeWordService : Service() {
 
     private fun respondAndResume(message: String) {
         updateNotification(message)
+        WakeWordSettings.updateAssistantPanel(this, "Done boss. $message", 10_000L)
         transitioningFromWake = true
-        speakThen(message) {
+        speakThen("Done boss. $message") {
             transitioningFromWake = false
             startCapture(commandMode = false)
         }
@@ -327,6 +332,7 @@ class WakeWordService : Service() {
 
     private fun requestForegroundReview(command: String, message: String) {
         transitioningFromWake = true
+        WakeWordSettings.updateAssistantPanel(this, "This action needs review. Unlock and open ZERO's notification.", 10_000L)
         postReviewNotification(command, message)
         speakThen("I captured that. Open ZERO to review the command.") {
             transitioningFromWake = false
@@ -579,6 +585,7 @@ class WakeWordService : Service() {
         localTts = null
         releaseCpuWakeLock()
         WakeWordSettings.setActive(this, false)
+        WakeWordSettings.dismissAssistantPanel(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -598,6 +605,7 @@ class WakeWordService : Service() {
             localTts = null
             releaseCpuWakeLock()
             WakeWordSettings.setActive(this, false)
+            WakeWordSettings.dismissAssistantPanel(this)
         }
         super.onDestroy()
     }

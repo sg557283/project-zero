@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -568,7 +569,6 @@ private fun ZeroApp(
     var input by rememberSaveable { mutableStateOf("") }
     var isListening by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
-    var showIntro by remember { mutableStateOf(true) }
     var pendingFlashlightCommand by remember { mutableStateOf<String?>(null) }
     var pendingShortcutContinuation by remember { mutableStateOf<(() -> Unit)?>(null) }
     var pendingCallNumber by remember { mutableStateOf<String?>(null) }
@@ -814,10 +814,6 @@ private fun ZeroApp(
         }
     }
     val runCommand: (String) -> Unit = { dispatchCommand(it, null) }
-    LaunchedEffect(Unit) {
-        delay(1_000)
-        showIntro = false
-    }
     DisposableEffect(page) {
         val window = (context as? android.app.Activity)?.window
         if (page == Page.Vault) window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
@@ -842,16 +838,13 @@ private fun ZeroApp(
     }
 
     ZeroTheme(themeMode) {
-        if (showIntro) {
-            IntroScreen()
-        } else {
         val background = MaterialTheme.colorScheme.background
         Scaffold(containerColor = background, topBar = {
             TopAppBar(
                 title = {
                     Text(
                         when (page) {
-                            Page.Home -> "ZERO-Assist 17.7.07"
+                            Page.Home -> "ZERO-Assist ${BuildConfig.VERSION_NAME}"
                             Page.SpeechModels -> "Voice Library"
                             Page.VoiceStudio -> "Offline Voice Studio"
                             Page.Scanner -> "Knowledge Scanner"
@@ -1150,28 +1143,6 @@ private fun ZeroApp(
                 confirmButton = { TextButton(onClick = { onlineRequestJob?.cancel() }) { Text("Cancel request") } },
             )
         }
-        }
-    }
-}
-
-@Composable
-private fun IntroScreen() {
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        Text(
-            "ZERO-Assist",
-            Modifier.align(Alignment.Center),
-            color = Color.White,
-            fontSize = 36.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Column(
-            Modifier.align(Alignment.BottomCenter).padding(bottom = 36.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text("version (17.7.07)", color = Color.White, style = MaterialTheme.typography.bodyMedium)
-            Text("Made by Love @Shree❤️", color = Color.White, style = MaterialTheme.typography.bodyMedium)
-        }
     }
 }
 
@@ -1217,6 +1188,26 @@ private fun HomeScreen(
     val moreSuggestions = HomeSuggestionCatalog.more
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         GlassCard(modifier = Modifier.padding(top = 4.dp)) {
+            Text(
+                "Welcome to ZERO",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Made by ❤️ @Shree",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "Version ${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(nowMillis)), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Light)
@@ -1228,7 +1219,7 @@ private fun HomeScreen(
         AssistantOrb(
             activity = orbActivity,
             reducedMotion = reducedMotion,
-            modifier = Modifier.fillMaxWidth().weight(1f).padding(vertical = 2.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 260.dp).weight(1f).padding(vertical = 2.dp),
         )
         val activityMessage = when (orbActivity) {
             OrbActivity.Idle -> "ZERO READY · OFFLINE COMMANDS AVAILABLE"
@@ -1369,6 +1360,12 @@ private fun SettingsScreen(
     val context = LocalContext.current
     var volumeShortcut by remember { mutableStateOf(HardwareActivationSettings.volumePairEnabled(context)) }
     var doubleShake by remember { mutableStateOf(HardwareActivationSettings.doubleShakeEnabled(context)) }
+    val accessibilityPreferences = remember {
+        context.getSharedPreferences("zero_accessibility", Context.MODE_PRIVATE)
+    }
+    var assistantEdgePanelEnabled by remember {
+        mutableStateOf(accessibilityPreferences.getBoolean("assistant_edge_panel", false))
+    }
     var shakeSensitivity by remember { mutableStateOf(HardwareActivationSettings.shakeSensitivity(context)) }
     var editingPhraseId by remember { mutableStateOf<String?>(null) }
     var phraseDraft by remember { mutableStateOf("") }
@@ -1388,7 +1385,7 @@ private fun SettingsScreen(
             AssistantOrb(OrbActivity.Idle, reducedMotion = true, Modifier.size(58.dp))
             Column {
                 Text("ZERO SYSTEM SETTINGS", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Text("Local controls · version 17.7.07", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Local controls · version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         GlassCard {
@@ -1465,6 +1462,7 @@ private fun SettingsScreen(
             wakeWordEnabled,
             onWakeWordEnabled,
         )
+        Text("Built-in wake phrases: Hey ZERO, OK ZERO, and Hey Shree. You can add up to three custom phrases.", style = MaterialTheme.typography.bodySmall)
         Text("Wake-word diagnostics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
         Text("Wake engine: ${when { wakeWordActive && activeModelId != null -> "running with $activeModelId"; activeModelId != null -> "$activeModelId selected; capture is not running"; else -> "unavailable until an offline STT model is ready" }}")
         Text("Microphone permission: ${if (microphonePermissionGranted) "granted" else "not granted"}")
@@ -1504,11 +1502,11 @@ private fun SettingsScreen(
                     phraseEditorError = null
                     phraseEditorVisible = true
                 },
-                enabled = wakeWordPhrases.size < 3,
+                enabled = wakeWordPhrases.count { !it.isDefault } < WakePhraseConfiguration.MAX_CUSTOM_PHRASES,
             ) { Text("Add custom phrase") }
             TextButton(onClick = {
-                onWakeWordPhrasesChanged(WakePhraseConfiguration.setEnabled(wakeWordPhrases, "default", true))
-            }) { Text("Restore Hey ZERO") }
+                onWakeWordPhrasesChanged(WakePhraseConfiguration.enableBuiltInPhrases(wakeWordPhrases))
+            }) { Text("Enable built-in phrases") }
         }
         Text("Say an enabled phrase, pause for the offline acknowledgement, then speak a command. Vosk uses a grammar built from enabled phrases; accuracy varies by model. Android may stop microphone access because of force-stop, battery controls, reboot policy, or device restrictions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
         TextButton(onClick = {
@@ -1573,6 +1571,20 @@ private fun SettingsScreen(
             HardwareActivationSettings.setVolumePairEnabled(context, enabled)
             if (enabled) context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         })
+        SettingSwitch(
+            "Assistant edge panel",
+            "Show a small status panel after a wake phrase over other apps. Enable ZERO in Android Accessibility settings. The lock screen only shows basic status; calls and sensitive actions need unlock and review.",
+            assistantEdgePanelEnabled,
+            { enabled ->
+                assistantEdgePanelEnabled = enabled
+                accessibilityPreferences.edit().putBoolean("assistant_edge_panel", enabled).apply()
+                if (enabled) {
+                    context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } else {
+                    WakeWordSettings.dismissAssistantPanel(context)
+                }
+            },
+        )
         SettingSwitch("Double-shake flashlight", "Requires an accelerometer and torch. Uses a visible foreground notification while running.", doubleShake, { enabled ->
             HardwareActivationSettings.setDoubleShakeEnabled(context, enabled)
             doubleShake = enabled
@@ -1598,7 +1610,7 @@ private fun SettingsScreen(
         TextButton(onClick = { onNavigate(Page.Privacy) }) { Text("Privacy and Permissions") }
         TextButton(onClick = { onNavigate(Page.Terms) }) { Text("Terms of Use") }
         TextButton(onClick = { onNavigate(Page.SpeechModels) }) { Text("Voice Library and storage") }
-        Text("About ZERO-Assist · version 17.7.07", style = MaterialTheme.typography.labelMedium)
+        Text("About ZERO-Assist · version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelMedium)
     }
     if (phraseEditorVisible) {
         AlertDialog(

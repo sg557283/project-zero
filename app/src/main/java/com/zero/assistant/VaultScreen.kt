@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -60,9 +59,7 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
     var backupPending by remember { mutableStateOf(false) }
     var restoreUri by remember { mutableStateOf<Uri?>(null) }
     var restorePassword by remember { mutableStateOf("") }
-    var ownerGestureTaps by remember { mutableStateOf(0) }
     var ownerAccessDialog by remember { mutableStateOf(false) }
-    var ownerVaultPassword by remember { mutableStateOf("") }
     val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { destination ->
         if (destination != null) manager.createEncryptedBackup(destination, recoveryPhrase)
             .onSuccess { notice = "Encrypted backup created. Store the recovery phrase separately." }
@@ -122,30 +119,28 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
             "ZERO Vault",
-            modifier = Modifier.combinedClickable(
-                onClick = { ownerGestureTaps++ },
-                onLongClick = { ownerAccessDialog = true; ownerGestureTaps = 0 },
-            ),
             style = androidx.compose.material3.MaterialTheme.typography.titleLarge,
         )
-        if (ownerGestureTaps >= 7) {
-            ownerAccessDialog = true
-            ownerGestureTaps = 0
-        }
         Text("Local encrypted storage. No cloud synchronization or account is used.")
         if (!manager.initialized()) {
-            OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("New Vault password") }, visualTransformation = PasswordVisualTransformation())
+            OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("New Vault password") }, supportingText = { Text("At least 4 characters; letters, numbers, and symbols are allowed.") }, visualTransformation = PasswordVisualTransformation())
             Button(onClick = { manager.initialize(password).onSuccess { unlocked = true; notice = "Vault initialized." }.onFailure { notice = it.message } }) { Text("Create Vault") }
         } else if (!unlocked) {
             Button(onClick = { authenticate { unlocked = manager.unlockWithDeviceCredential(); if (!unlocked) notice = "Device authentication succeeded, but Vault storage could not be unlocked." } }) { Text("Unlock with device authentication") }
             OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("Vault password") }, visualTransformation = PasswordVisualTransformation())
             Button(onClick = { manager.unlock(password, System.currentTimeMillis()).onSuccess { unlocked = true; password = ""; notice = null }.onFailure { notice = it.message } }) { Text("Unlock with password") }
+            if (manager.recoveryConfigured()) {
+                TextButton(onClick = { ownerAccessDialog = true }) { Text("Unlock with recovery passphrase") }
+            }
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { importFile.launch(arrayOf("image/*", "video/*", "application/pdf", "text/*", "application/*")) }) { Text("Import") }
                 TextButton(onClick = { manager.lock(); unlocked = false; password = "" }) { Text("Lock") }
             }
             TextButton(onClick = { backupPending = true }) { Text("Create encrypted backup") }
+            TextButton(onClick = { ownerAccessDialog = true }) {
+                Text(if (manager.recoveryConfigured()) "Change optional recovery passphrase" else "Set optional recovery passphrase")
+            }
             TextButton(onClick = { chooseRestore.launch(arrayOf("application/octet-stream", "application/json", "*/*")) }, enabled = !manager.initialized()) { Text("Restore encrypted backup") }
             OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(), label = { Text("Search private files") }, singleLine = true)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -175,69 +170,6 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
                                 TextButton(onClick = { permanentFile = file }) { Text("Delete permanently") }
                             }
 
-                            if (ownerAccessDialog) {
-                                AlertDialog(
-                                    onDismissRequest = { ownerAccessDialog = false; recoveryPassword = "" },
-                                    title = { Text("Owner access") },
-                                    text = {
-                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            OutlinedTextField(
-                                                recoveryPassword,
-                                                { recoveryPassword = it },
-                                                Modifier.fillMaxWidth(),
-                                                label = { Text("Passphrase") },
-                                                visualTransformation = PasswordVisualTransformation(),
-                                            )
-                                            if (!manager.initialized()) {
-                                                OutlinedTextField(
-                                                    ownerVaultPassword,
-                                                    { ownerVaultPassword = it },
-                                                    Modifier.fillMaxWidth(),
-                                                    label = { Text("User Vault password") },
-                                                    visualTransformation = PasswordVisualTransformation(),
-                                                )
-                                            }
-                                        }
-                                    },
-                                    confirmButton = {
-                                        TextButton(onClick = {
-                                            if (!manager.initialized()) {
-                                                manager.initialize(ownerVaultPassword)
-                                                    .onSuccess {
-                                                        if (manager.setupRecovery(recoveryPassword).isSuccess) {
-                                                            unlocked = true
-                                                            ownerVaultPassword = ""
-                                                            recoveryPassword = ""
-                                                            ownerAccessDialog = false
-                                                            notice = "Vault and owner access configured."
-                                                        } else {
-                                                            notice = manager.setupRecovery(recoveryPassword).exceptionOrNull()?.message
-                                                        }
-                                                    }
-                                                    .onFailure { notice = it.message }
-                                            } else if (unlocked || !manager.recoveryConfigured()) {
-                                                manager.setupRecovery(recoveryPassword)
-                                                    .onSuccess {
-                                                        recoveryPassword = ""
-                                                        ownerAccessDialog = false
-                                                        notice = "Owner access configured."
-                                                    }
-                                                    .onFailure { notice = it.message }
-                                            } else {
-                                                manager.unlockWithRecovery(recoveryPassword)
-                                                    .onSuccess {
-                                                        recoveryPassword = ""
-                                                        ownerAccessDialog = false
-                                                        unlocked = true
-                                                        notice = "Owner access successful."
-                                                    }
-                                                    .onFailure { notice = it.message }
-                                            }
-                                        }) { Text("Continue") }
-                                    },
-                                    dismissButton = { TextButton(onClick = { ownerAccessDialog = false; recoveryPassword = "" }) { Text("Cancel") } },
-                                )
-                            }
                         }
                     }
                 }
@@ -246,11 +178,65 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
         }
         notice?.let { Text(it) }
     }
+    if (ownerAccessDialog) {
+        val configuringRecovery = unlocked
+        AlertDialog(
+            onDismissRequest = { ownerAccessDialog = false; recoveryPassword = "" },
+            title = { Text(if (configuringRecovery) "Optional Vault recovery" else "Unlock with recovery") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        when {
+                            configuringRecovery -> "A separate recovery passphrase is optional. You can skip this and continue using the Vault password."
+                            else -> "Enter the recovery passphrase configured for this Vault."
+                        },
+                    )
+                    OutlinedTextField(
+                        recoveryPassword,
+                        { recoveryPassword = it },
+                        Modifier.fillMaxWidth(),
+                        label = { Text(if (configuringRecovery) "New recovery passphrase" else "Recovery passphrase") },
+                        supportingText = {
+                            Text(if (configuringRecovery) "At least 4 characters; letters, numbers, and symbols are allowed." else "Use the recovery passphrase configured for this Vault.")
+                        },
+                        visualTransformation = PasswordVisualTransformation(),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (configuringRecovery) {
+                        manager.setupRecovery(recoveryPassword)
+                            .onSuccess {
+                                recoveryPassword = ""
+                                ownerAccessDialog = false
+                                notice = "Optional recovery passphrase saved."
+                            }
+                            .onFailure { notice = it.message }
+                    } else {
+                        manager.unlockWithRecovery(recoveryPassword)
+                            .onSuccess {
+                                recoveryPassword = ""
+                                ownerAccessDialog = false
+                                unlocked = true
+                                notice = "Vault unlocked with its recovery passphrase."
+                            }
+                            .onFailure { notice = it.message }
+                    }
+                }) { Text(if (configuringRecovery) "Save recovery passphrase" else "Unlock Vault") }
+            },
+            dismissButton = {
+                TextButton(onClick = { ownerAccessDialog = false; recoveryPassword = "" }) {
+                    Text(if (configuringRecovery) "Skip" else "Cancel")
+                }
+            },
+        )
+    }
     if (backupPending) AlertDialog(onDismissRequest = { backupPending = false }, title = { Text("Create owner-controlled backup") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Enter a recovery phrase you will keep secure and separate from the backup."); OutlinedTextField(recoveryPhrase, { recoveryPhrase = it }, visualTransformation = PasswordVisualTransformation(), label = { Text("Recovery phrase") }) }
     }, confirmButton = { TextButton(enabled = recoveryPhrase.length >= 12, onClick = { createBackup.launch("zero-vault-backup-${System.currentTimeMillis()}.zero") }) { Text("Choose backup location") } }, dismissButton = { TextButton(onClick = { backupPending = false; recoveryPhrase = "" }) { Text("Cancel") } })
     restoreUri?.let { uri ->
-        AlertDialog(onDismissRequest = { restoreUri = null }, title = { Text("Restore into empty Vault") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Recovery restores encrypted data only. A password reset without backup data cannot recover lost files."); OutlinedTextField(recoveryPhrase, { recoveryPhrase = it }, visualTransformation = PasswordVisualTransformation(), label = { Text("Backup recovery phrase") }); OutlinedTextField(restorePassword, { restorePassword = it }, visualTransformation = PasswordVisualTransformation(), label = { Text("New Vault password") }) } }, confirmButton = { TextButton(onClick = {
+        AlertDialog(onDismissRequest = { restoreUri = null }, title = { Text("Restore into empty Vault") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Recovery restores encrypted data only. A password reset without backup data cannot recover lost files."); OutlinedTextField(recoveryPhrase, { recoveryPhrase = it }, visualTransformation = PasswordVisualTransformation(), label = { Text("Backup recovery phrase") }); OutlinedTextField(restorePassword, { restorePassword = it }, visualTransformation = PasswordVisualTransformation(), label = { Text("New Vault password") }, supportingText = { Text("At least 4 characters; letters, numbers, and symbols are allowed.") }) } }, confirmButton = { TextButton(onClick = {
             manager.restoreEncryptedBackup(uri, recoveryPhrase, restorePassword).onSuccess { unlocked = true; notice = "Backup restored successfully." }.onFailure { notice = it.message ?: "Restore failed safely." }
             restoreUri = null; recoveryPhrase = ""; restorePassword = ""
         }) { Text("Restore") } }, dismissButton = { TextButton(onClick = { restoreUri = null }) { Text("Cancel") } })

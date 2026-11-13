@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="zero_accessibility_service_description">ZERO can listen for a deliberate simultaneous Volume Up and Volume Down press to activate its existing voice assistant. It does not read screen content or ordinary accessibility events.</string>
+    <string name="zero_accessibility_service_description">ZERO can listen for the optional Volume Up and Volume Down shortcut and show an assistant status panel after a wake phrase. The panel does not inspect other apps' screen contents. Android may restrict overlays on the lock screen; calls and sensitive actions require unlock and review.</string>
 </resources>

@@ -9,13 +9,11 @@ data class VaultAttemptState(
 )
 
 object VaultSecurity {
-    const val MIN_PASSWORD_LENGTH = 12
+    const val MIN_PASSWORD_LENGTH = 4
 
     fun validatePassword(password: String): String? = when {
         password.length < MIN_PASSWORD_LENGTH -> "Use at least $MIN_PASSWORD_LENGTH characters."
         password.length > 128 -> "Use 128 characters or fewer."
-        !password.any { it.isLetter() } -> "Include at least one letter."
-        !password.any { it.isDigit() } -> "Include at least one number."
         else -> null
     }
 

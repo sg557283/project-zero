@@ -58,7 +58,10 @@ class SpeechOutputController(
     fun initialize() {
         if (!closed && !initialized) {
             engine.setOnSpeechComplete {
-                if (!closed && status == SpeechOutputStatus.Speaking) updateStatus(readyStatus)
+                if (!closed && status == SpeechOutputStatus.Speaking) {
+                    updateStatus(readyStatus)
+                    speakNextPending()
+                }
             }
             engine.initialize(::onInitialized)
         }
@@ -82,10 +85,11 @@ class SpeechOutputController(
 
     fun speak(text: String) {
         if (closed || text.isBlank()) return
-        if (!initialized) {
+        if (!initialized || status == SpeechOutputStatus.Speaking) {
             pending.addLast(text)
             return
         }
+        if (status == SpeechOutputStatus.SpeakFailed) updateStatus(readyStatus)
         speakWhenReady(text)
     }
 
@@ -140,7 +144,13 @@ class SpeechOutputController(
         }
         readyStatus = SpeechOutputStatus.Ready(language)
         updateStatus(readyStatus)
-        while (pending.isNotEmpty() && status is SpeechOutputStatus.Ready && !closed) {
+        speakNextPending()
+    }
+
+    private fun speakNextPending() {
+        if (pending.isNotEmpty() && !closed &&
+            (status is SpeechOutputStatus.Ready || status is SpeechOutputStatus.ReadyWithVoice)
+        ) {
             speakWhenReady(pending.removeFirst())
         }
     }
@@ -148,7 +158,10 @@ class SpeechOutputController(
     private fun speakWhenReady(text: String) {
         if (status !is SpeechOutputStatus.Ready && status !is SpeechOutputStatus.ReadyWithVoice) return
         updateStatus(SpeechOutputStatus.Speaking)
-        if (!engine.speak(text)) updateStatus(SpeechOutputStatus.SpeakFailed)
+        if (!engine.speak(text)) {
+            pending.clear()
+            updateStatus(SpeechOutputStatus.SpeakFailed)
+        }
     }
 
     private fun updateStatus(next: SpeechOutputStatus) {

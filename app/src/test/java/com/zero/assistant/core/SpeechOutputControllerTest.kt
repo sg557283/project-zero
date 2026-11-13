@@ -141,7 +141,26 @@ class SpeechOutputControllerTest {
         controller.initialize()
         engine.finishInitialization()
 
-        controller.speak("I am here.")
+        controller.speak("Yes boss.")
+        assertEquals(SpeechOutputStatus.Speaking, controller.status)
+
+        engine.speechCompleteListener?.invoke()
+        assertEquals(SpeechOutputStatus.Ready(SpeechLanguage.English), controller.status)
+    }
+
+    @Test
+    fun queuesSpeechUntilTheCurrentUtteranceCompletes() {
+        val engine = FakeEngine(completesSpeechImmediately = false)
+        val controller = SpeechOutputController(engine) {}
+        controller.initialize()
+        engine.finishInitialization()
+
+        controller.speak("Yes boss.")
+        controller.speak("Done boss.")
+        assertEquals(listOf("Yes boss."), engine.spoken)
+
+        engine.speechCompleteListener?.invoke()
+        assertEquals(listOf("Yes boss.", "Done boss."), engine.spoken)
         assertEquals(SpeechOutputStatus.Speaking, controller.status)
 
         engine.speechCompleteListener?.invoke()

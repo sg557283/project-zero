@@ -17,6 +17,10 @@ object WakeWordSettings {
     const val EXTRA_RESUME = "com.zero.assistant.extra.RESUME_WAKE_WORD"
     const val ACTION_SETTINGS_CHANGED = "com.zero.assistant.action.WAKE_WORD_SETTINGS_CHANGED"
     const val ACTION_PHRASES_CHANGED = "com.zero.assistant.action.WAKE_WORD_PHRASES_CHANGED"
+    const val ACTION_ASSISTANT_PANEL = "com.zero.assistant.action.ASSISTANT_PANEL"
+    const val EXTRA_PANEL_MESSAGE = "com.zero.assistant.extra.PANEL_MESSAGE"
+    const val EXTRA_PANEL_DISMISS = "com.zero.assistant.extra.PANEL_DISMISS"
+    const val EXTRA_PANEL_DISMISS_AFTER_MS = "com.zero.assistant.extra.PANEL_DISMISS_AFTER_MS"
     const val CHANNEL_ID = "zero_background_voice"
     const val NOTIFICATION_ID = 7101
 
@@ -110,6 +114,23 @@ object WakeWordSettings {
             .putString(KEY_ERROR, error)
             .apply()
         broadcastChanged(context)
+    }
+
+    fun updateAssistantPanel(context: Context, message: String, dismissAfterMillis: Long = 0L) {
+        context.sendBroadcast(
+            android.content.Intent(ACTION_ASSISTANT_PANEL)
+                .setPackage(context.packageName)
+                .putExtra(EXTRA_PANEL_MESSAGE, message)
+                .putExtra(EXTRA_PANEL_DISMISS_AFTER_MS, dismissAfterMillis),
+        )
+    }
+
+    fun dismissAssistantPanel(context: Context) {
+        context.sendBroadcast(
+            android.content.Intent(ACTION_ASSISTANT_PANEL)
+                .setPackage(context.packageName)
+                .putExtra(EXTRA_PANEL_DISMISS, true),
+        )
     }
 
     private fun preferences(context: Context) = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)

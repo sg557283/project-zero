@@ -2,16 +2,47 @@ package com.zero.assistant.data
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import androidx.core.content.ContextCompat
 import com.zero.assistant.core.HardwareActivationDebouncer
 
 class VolumeAccessibilityService : AccessibilityService() {
+    private lateinit var edgePanel: AssistantEdgePanel
     private var volumeUpDown = false
     private var lastVolumeDown = 0L
     private var lastActivation = -2_000L
+    private val assistantPanelReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (!::edgePanel.isInitialized) return
+            val receivedIntent = intent ?: return
+            val enabled = getSharedPreferences("zero_accessibility", Context.MODE_PRIVATE)
+                .getBoolean("assistant_edge_panel", false)
+            if (!enabled || receivedIntent.getBooleanExtra(WakeWordSettings.EXTRA_PANEL_DISMISS, false)) {
+                edgePanel.dismiss()
+            } else {
+                edgePanel.show(
+                    receivedIntent.getStringExtra(WakeWordSettings.EXTRA_PANEL_MESSAGE).orEmpty(),
+                    receivedIntent.getLongExtra(WakeWordSettings.EXTRA_PANEL_DISMISS_AFTER_MS, 0L),
+                )
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        edgePanel = AssistantEdgePanel(this)
+        ContextCompat.registerReceiver(
+            this,
+            assistantPanelReceiver,
+            IntentFilter(WakeWordSettings.ACTION_ASSISTANT_PANEL),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -55,4 +86,10 @@ class VolumeAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() { volumeUpDown = false }
+
+    override fun onDestroy() {
+        unregisterReceiver(assistantPanelReceiver)
+        edgePanel.dismiss()
+        super.onDestroy()
+    }
 }

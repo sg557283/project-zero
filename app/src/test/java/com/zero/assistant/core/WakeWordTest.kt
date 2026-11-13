@@ -8,6 +8,7 @@ import org.junit.Test
 class WakeWordTest {
     @Test fun matchesDefaultPhraseAndKeepsFollowingCommand() {
         assertEquals(WakeWordMatch("open youtube"), WakeWord.match("Hey ZERO, open YouTube"))
+        assertEquals(WakeWordMatch("open youtube"), WakeWord.match("Hey zro, open YouTube"))
     }
 
     @Test fun matchesCustomPhraseIgnoringCaseAndPunctuation() {
@@ -22,13 +23,29 @@ class WakeWordTest {
         assertEquals(WakeWordMatch(""), WakeWord.match("Hey ZERO"))
     }
 
-    @Test fun defaultPhraseIsPreservedWithAtMostTwoCustomPhrases() {
-        val oneCustom = WakePhraseConfiguration.add(WakePhraseConfiguration.initial(), "Hello ZERO")
-        val twoCustom = WakePhraseConfiguration.add(oneCustom, "Okay ZERO")
+    @Test fun keepsThreeBuiltInsAndAllowsThreeCustomPhrases() {
+        val initial = WakePhraseConfiguration.initial()
+        val withCustomPhrases = listOf("Hello ZERO", "Okay ZERO", "Computer")
+            .fold(initial) { phrases, phrase -> WakePhraseConfiguration.add(phrases, phrase) }
 
-        assertEquals(listOf("Hey ZERO", "Hello ZERO", "Okay ZERO"), twoCustom.map { it.phrase })
-        assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.add(twoCustom, "Wake up") }
-        assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.remove(twoCustom, "default") }
+        assertEquals(
+            listOf("Hey ZERO", "OK ZERO", "Hey Shree", "Hello ZERO", "Okay ZERO", "Computer"),
+            withCustomPhrases.map { it.phrase },
+        )
+        assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.add(withCustomPhrases, "Wake up") }
+        assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.remove(withCustomPhrases, "default-0") }
+    }
+
+    @Test fun builtInPhrasesCanBeDisabledAndRestoredIndependently() {
+        val initial = WakePhraseConfiguration.initial()
+        val disabled = WakePhraseConfiguration.setEnabled(initial, "default-1", false)
+
+        assertEquals(false, disabled.first { it.id == "default-1" }.enabled)
+        assertEquals(true, disabled.first { it.id == "default-0" }.enabled)
+        assertEquals(
+            true,
+            WakePhraseConfiguration.enableBuiltInPhrases(disabled).first { it.id == "default-1" }.enabled,
+        )
     }
 
     @Test fun rejectsEmptyAndDuplicatePhrasesAndHonorsDisabledCustomPhrase() {
@@ -36,6 +53,8 @@ class WakeWordTest {
         assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.add(initial, "  ") }
         assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.add(initial, "!!!") }
         assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.add(initial, "hey zero") }
+        assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.add(initial, "hey zro") }
+        assertThrows(IllegalArgumentException::class.java) { WakePhraseConfiguration.add(initial, "OK ZERO") }
         val configured = WakePhraseConfiguration.add(initial, "Hello ZERO")
         val disabled = WakePhraseConfiguration.setEnabled(configured, "custom-1", false)
 
@@ -46,7 +65,7 @@ class WakeWordTest {
 
     @Test fun migratesLegacyPhraseWithoutRemovingDefault() {
         assertEquals(
-            listOf("Hey ZERO", "Computer"),
+            listOf("Hey ZERO", "OK ZERO", "Hey Shree", "Computer"),
             WakePhraseConfiguration.initial("Computer").map { it.phrase },
         )
     }

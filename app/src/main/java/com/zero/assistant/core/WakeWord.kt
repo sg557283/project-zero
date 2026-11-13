@@ -16,12 +16,13 @@ object WakeServiceHeartbeat {
 
 object WakePhraseConfiguration {
     const val DEFAULT_PHRASE = "Hey ZERO"
-    private const val MAX_PHRASES = 3
+    const val MAX_CUSTOM_PHRASES = 3
+    private val BUILT_IN_PHRASES = listOf(DEFAULT_PHRASE, "OK ZERO", "Hey Shree")
 
     fun initial(legacyPhrase: String? = null): List<WakePhrase> {
-        val phrases = mutableListOf(WakePhrase("default", DEFAULT_PHRASE, true, isDefault = true))
+        val phrases = builtInPhrases()
         val legacy = legacyPhrase?.trim().orEmpty()
-        if (legacy.isNotEmpty() && normalize(legacy) != normalize(DEFAULT_PHRASE)) {
+        if (legacy.isNotEmpty() && BUILT_IN_PHRASES.none { normalize(it) == normalize(legacy) }) {
             phrases += WakePhrase("custom-1", legacy, true)
         }
         return phrases
@@ -29,8 +30,10 @@ object WakePhraseConfiguration {
 
     fun add(phrases: List<WakePhrase>, value: String): List<WakePhrase> {
         val phrase = validate(phrases, value)
-        require(phrases.size < MAX_PHRASES) { "At most two custom wake phrases are supported." }
-        val id = (1..2).map { "custom-$it" }.first { candidate -> phrases.none { it.id == candidate } }
+        require(phrases.count { !it.isDefault } < MAX_CUSTOM_PHRASES) {
+            "At most three custom wake phrases are supported."
+        }
+        val id = (1..MAX_CUSTOM_PHRASES).map { "custom-$it" }.first { candidate -> phrases.none { it.id == candidate } }
         return canonicalize(phrases) + WakePhrase(id, phrase, enabled = true)
     }
 
@@ -51,10 +54,20 @@ object WakePhraseConfiguration {
     }
 
     fun canonicalize(phrases: List<WakePhrase>): List<WakePhrase> {
-        val default = phrases.firstOrNull { it.isDefault } ?: WakePhrase("default", DEFAULT_PHRASE, true, isDefault = true)
-        val custom = phrases.filterNot { it.isDefault }.take(2)
-        return listOf(default.copy(id = "default", phrase = DEFAULT_PHRASE, isDefault = true)) + custom
+        val defaults = builtInPhrases().map { builtIn ->
+            val stored = phrases.firstOrNull { it.isDefault && normalize(it.phrase) == normalize(builtIn.phrase) }
+            builtIn.copy(enabled = stored?.enabled ?: true)
+        }
+        val custom = phrases.filterNot { it.isDefault }.take(MAX_CUSTOM_PHRASES)
+        return defaults + custom
     }
+
+    fun enableBuiltInPhrases(phrases: List<WakePhrase>): List<WakePhrase> =
+        canonicalize(phrases).map { if (it.isDefault) it.copy(enabled = true) else it }
+
+    private fun builtInPhrases(): MutableList<WakePhrase> = BUILT_IN_PHRASES.mapIndexed { index, phrase ->
+        WakePhrase("default-$index", phrase, enabled = true, isDefault = true)
+    }.toMutableList()
 
     private fun validate(phrases: List<WakePhrase>, value: String): String {
         val phrase = value.trim().replace(Regex("\\s+"), " ")
@@ -65,10 +78,7 @@ object WakePhraseConfiguration {
         return phrase
     }
 
-    private fun normalize(text: String): String = text.lowercase()
-        .replace(Regex("[^\\p{L}\\p{M}\\p{N}\\s]"), " ")
-        .replace(Regex("\\s+"), " ")
-        .trim()
+    private fun normalize(text: String): String = WakeWord.normalizePhrase(text)
 }
 
 object WakeWord {
@@ -78,6 +88,7 @@ object WakeWord {
         .replace(Regex("[^\\p{L}\\p{M}\\p{N}\\s]"), " ")
         .replace(Regex("\\s+"), " ")
         .trim()
+        .replace(Regex("\\bzro\\b"), "zero")
 
     fun match(transcript: String, phrase: String = DEFAULT_PHRASE): WakeWordMatch? {
         val normalizedTranscript = normalizePhrase(transcript)
