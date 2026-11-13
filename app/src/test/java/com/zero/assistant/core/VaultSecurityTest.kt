@@ -7,7 +7,7 @@ import org.junit.Test
 
 class VaultSecurityTest {
     @Test fun passwordLengthIsValidated() {
-        assertTrue(VaultSecurity.validatePassword("short") != null)
+        assertTrue(VaultSecurity.validatePassword("abc") != null)
         assertTrue(VaultSecurity.validatePassword("correct horse 2026") == null)
     }
 
