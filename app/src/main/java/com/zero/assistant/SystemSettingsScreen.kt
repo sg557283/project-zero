@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zero.assistant.core.ShakeSensitivity
 import com.zero.assistant.core.SpeechLanguage
+import com.zero.assistant.core.SpeechOutputStatus
 import com.zero.assistant.core.WakePhrase
 import com.zero.assistant.core.WakePhraseConfiguration
 import com.zero.assistant.core.AiProviderContract

@@ -2,14 +2,9 @@ package com.zero.assistant.data
 
 import android.media.audiofx.AutomaticGainControl
 import android.util.Log
-import org.vosk.android.SpeechService
 
 internal class VoiceCaptureEffects {
     private var automaticGainControl: AutomaticGainControl? = null
-
-    fun attach(speechService: SpeechService, enabled: Boolean): Boolean {
-        return attach(speechService.audioSessionId, enabled)
-    }
 
     fun attach(audioSessionId: Int, enabled: Boolean): Boolean {
         release()

@@ -291,7 +291,7 @@ class WakeWordService : Service() {
         lastWakeAt = now
         WakeWordSettings.recordDetection(this)
         WakeWordSettings.updateAssistantPanel(this, "Wake phrase recognized. ZERO is getting ready.")
-        beginCommandSession(match.command)
+        beginCommandSession(match.second.command)
     }
 
     private fun handleCaptureFailure(failure: Exception) {

@@ -31,7 +31,7 @@ internal object VoiceAudioProcessing {
 internal class VoiceAudioCapture(
     context: Context,
     private val recognizer: Recognizer,
-    sensitivity: WakeWordSettings.Sensitivity,
+    private val sensitivity: WakeWordSettings.Sensitivity,
     enableKeywordSpotter: Boolean,
     private val onRecognition: (String) -> Unit,
     private val onKeyword: (String) -> Unit,
