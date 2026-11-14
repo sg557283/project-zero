@@ -12,6 +12,8 @@ internal sealed interface OnScreenAction {
     data object PlayPause : OnScreenAction
     data object NextTrack : OnScreenAction
     data object PreviousTrack : OnScreenAction
+    data object ReadScreen : OnScreenAction
+    data object SummarizeScreen : OnScreenAction
 }
 
 internal object OnScreenActionParser {
@@ -29,6 +31,9 @@ internal object OnScreenActionParser {
             lower in setOf("play pause", "play or pause", "pause music", "resume music", "toggle music") -> OnScreenAction.PlayPause
             lower in setOf("next track", "next song", "skip track") -> OnScreenAction.NextTrack
             lower in setOf("previous track", "previous song", "go to previous track") -> OnScreenAction.PreviousTrack
+            lower in setOf("read screen", "screen padho", "screen par kya hai") -> OnScreenAction.ReadScreen
+            lower in setOf("summarize this", "summarize screen", "isko short me samjhao", "iska saar batao") ->
+                OnScreenAction.SummarizeScreen
             else -> parseArgument(command, CLICK_PREFIXES)?.let(OnScreenAction::Click)
                 ?: hinglishTapPattern.matchEntire(command)?.groupValues?.get(1)?.trim()?.takeIf(String::isNotEmpty)?.let(OnScreenAction::Click)
                 ?: parseArgument(command, TYPE_PREFIXES)?.let(OnScreenAction::TypeText)

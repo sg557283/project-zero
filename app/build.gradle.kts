@@ -25,6 +25,10 @@ android {
         versionCode = 17072007
         versionName = "17.07.2007"
 
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -40,6 +44,14 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+        }
+    }
 }
 
 dependencies {
@@ -50,9 +62,12 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.9")
     implementation("androidx.biometric:biometric:1.4.0-alpha02")
     implementation("androidx.lifecycle:lifecycle-runtime:2.9.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-android:2.9.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel:2.9.3")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-android:2.9.3")
     implementation("androidx.savedstate:savedstate:1.3.2")
+    implementation("androidx.savedstate:savedstate-android:1.3.2")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
@@ -68,6 +83,7 @@ dependencies {
     implementation("androidx.camera:camera-view:1.4.2")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.16.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")

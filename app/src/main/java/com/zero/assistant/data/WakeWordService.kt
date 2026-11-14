@@ -46,6 +46,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
@@ -71,6 +72,8 @@ class WakeWordService : Service() {
     private var activeModel: Model? = null
     private var activeModelId: String? = null
     private var localTts: TextToSpeech? = null
+    private var smartAudioFocus: SmartAudioFocusManager? = null
+    private var microphoneAvailable = true
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var localTtsReady = false
     private var localTtsUnavailable = false
@@ -103,6 +106,18 @@ class WakeWordService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        smartAudioFocus = SmartAudioFocusManager(this) { available ->
+            handler.post {
+                if (microphoneAvailable == available) return@post
+                microphoneAvailable = available
+                if (!available && captureActive) {
+                    stopCapture()
+                    WakeWordSettings.updateAssistantPanel(this, "Microphone is busy or a phone call is active. ZERO will resume when available.")
+                } else if (available && serviceRunning && activeModel != null && !captureActive && !speaking) {
+                    startCapture(commandMode = awaitingCommand)
+                }
+            }
+        }.also(SmartAudioFocusManager::start)
         createNotificationChannel()
         initializeLocalTts()
         ContextCompat.registerReceiver(
@@ -209,6 +224,8 @@ class WakeWordService : Service() {
 
     private fun startCapture(commandMode: Boolean): Boolean {
         if (!serviceRunning || !WakeWordSettings.enabled(this)) return false
+        if (!microphoneAvailable) return false
+        if (!commandMode) smartAudioFocus?.releaseCommandFocus()
         val model = activeModel ?: return false
         stopCapture()
         return try {
@@ -238,6 +255,7 @@ class WakeWordService : Service() {
                 onFailure = { failure -> handler.post { handleCaptureFailure(failure) } },
             )
             audioCapture = capture
+            smartAudioFocus?.setOwnAudioSessionId(capture.audioSessionId)
             voiceCaptureEffects.attach(
                 capture.audioSessionId,
                 enabled = true,
@@ -290,6 +308,7 @@ class WakeWordService : Service() {
         if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
         lastWakeAt = now
         WakeWordSettings.recordDetection(this)
+        smartAudioFocus?.requestCommandFocus()
         WakeWordSettings.updateAssistantPanel(this, "Wake phrase recognized. ZERO is getting ready.")
         beginCommandSession(match.second.command)
     }
@@ -327,6 +346,7 @@ class WakeWordService : Service() {
         if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
         lastWakeAt = now
         WakeWordSettings.recordDetection(this)
+        smartAudioFocus?.requestCommandFocus()
         WakeWordSettings.updateAssistantPanel(this, "Wake phrase recognized. ZERO is getting ready.")
         beginCommandSession(match.second.command)
     }
@@ -390,6 +410,15 @@ class WakeWordService : Service() {
             AssistantCommand.TellTime -> respondAndResume("It is ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}.")
             AssistantCommand.BatteryStatus -> respondAndResume(readBatteryStatus())
             is AssistantCommand.AdjustVolume -> respondAndResume(adjustMediaVolume(command.increase))
+            is AssistantCommand.SetAudioMuted -> respondAndResume(setMediaMuted(command.muted))
+            is AssistantCommand.CallControl ->
+                respondAndResume(CallAssistantManager(this).execute(command.action))
+            is AssistantCommand.Weather -> serviceScope.launch {
+                val forecast = withContext(Dispatchers.IO) {
+                    LiveWeatherService(this@WakeWordService).forecast(command.city)
+                }
+                respondAndResume(forecast)
+            }
             is AssistantCommand.DraftCallContact ->
                 requestForegroundReview(text, "Open ZERO to review the contact request. ZERO will not call a contact without choosing a number.")
             AssistantCommand.ToggleFlashlight -> {
@@ -523,6 +552,7 @@ class WakeWordService : Service() {
         val currentCapture = audioCapture
         audioCapture = null
         currentCapture?.stop()
+        smartAudioFocus?.setOwnAudioSessionId(0)
         voiceCaptureEffects.release()
         val currentRecognizer = recognizer
         recognizer = null
@@ -580,6 +610,16 @@ class WakeWordService : Service() {
         } catch (failure: SecurityException) {
             "Android denied the media volume change: ${failure.message ?: "permission unavailable"}."
         }
+    }
+
+    private fun setMediaMuted(muted: Boolean): String {
+        val audioManager = getSystemService(android.media.AudioManager::class.java)
+            ?: return "Audio controls are unavailable on this device."
+        val direction = if (muted) android.media.AudioManager.ADJUST_MUTE else android.media.AudioManager.ADJUST_UNMUTE
+        return runCatching {
+            audioManager.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, direction, 0)
+            if (muted) "Media sound muted." else "Media sound unmuted."
+        }.getOrElse { "Android could not change media sound: ${it.message ?: "audio unavailable"}." }
     }
 
     private fun setFlashlight(enabled: Boolean): String = TorchController.set(this, enabled).fold(
@@ -700,6 +740,8 @@ class WakeWordService : Service() {
         localTts?.shutdown()
         localTts = null
         releaseCpuWakeLock()
+        smartAudioFocus?.close()
+        smartAudioFocus = null
         WakeWordSettings.setActive(this, false)
         WakeWordSettings.dismissAssistantPanel(this)
         stopForeground(STOP_FOREGROUND_REMOVE)

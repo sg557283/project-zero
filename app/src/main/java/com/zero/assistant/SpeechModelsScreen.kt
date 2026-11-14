@@ -27,10 +27,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.zero.assistant.core.ModelTransferState
+import com.zero.assistant.core.MobileActionBrainState
 import com.zero.assistant.core.OfflineTtsVoice
 import com.zero.assistant.core.VoiceLibraryCategory
 import com.zero.assistant.data.SpeechModelManager
@@ -38,12 +40,15 @@ import com.zero.assistant.core.SpeechModelSpec
 import com.zero.assistant.core.VoiceModelCatalog
 import com.zero.assistant.core.VoiceModelTransferState
 import com.zero.assistant.data.ModelDownloadManager
+import com.zero.assistant.data.MobileActionBrainEngine
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun SpeechModelsScreen(
     modifier: Modifier,
     manager: SpeechModelManager,
     voiceModelManager: ModelDownloadManager,
+    actionBrainEngine: MobileActionBrainEngine,
     refreshTtsVoices: () -> Unit,
     prepareForVoiceModelRemoval: (() -> Unit) -> Unit,
     onModelRemoved: () -> Unit,
@@ -57,10 +62,14 @@ internal fun SpeechModelsScreen(
     val activeModelId by manager.activeModelId.collectAsState()
     val voiceModelState by voiceModelManager.state.collectAsState()
     val activeVoiceModelId by voiceModelManager.activeModelId.collectAsState()
+    val actionBrainState by actionBrainEngine.state.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
     var selectedCategory by remember { mutableStateOf(VoiceLibraryCategory.Simple) }
     var confirmDownload by remember { mutableStateOf<SpeechModelSpec?>(null) }
     var confirmVoiceDownload by remember { mutableStateOf(false) }
     var confirmVoiceUninstall by remember { mutableStateOf(false) }
+    var confirmBrainDownload by remember { mutableStateOf(false) }
+    var confirmBrainUninstall by remember { mutableStateOf(false) }
     var confirmUninstall by remember { mutableStateOf<SpeechModelSpec?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
 
@@ -144,6 +153,27 @@ internal fun SpeechModelsScreen(
                         )
                     }
                 }
+                VoiceLibraryCategory.OfflineAI -> {
+                    item { Text("Offline AI Action Brain", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+                    item {
+                        MobileActionBrainCard(
+                            state = actionBrainState,
+                            manager = actionBrainEngine,
+                            onDownload = { confirmBrainDownload = true },
+                            onActivate = {
+                                coroutineScope.launch {
+                                    val result = actionBrainEngine.activate()
+                                    feedback = result.exceptionOrNull()?.message
+                                        ?: "The offline action brain is active."
+                                }
+                            },
+                            onResume = {
+                                if (!actionBrainEngine.resume()) feedback = "Action brain download could not resume."
+                            },
+                            onUninstall = { confirmBrainUninstall = true },
+                        )
+                    }
+                }
             }
             item { Text("Speech recognition models", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
             item { Text("These STT models recognize speech; they are not text-to-speech voices.", style = MaterialTheme.typography.bodySmall) }
@@ -211,6 +241,55 @@ internal fun SpeechModelsScreen(
                 }) { Text("Download") }
             },
             dismissButton = { TextButton(onClick = { confirmVoiceDownload = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (confirmBrainDownload) {
+        val model = VoiceModelCatalog.actionBrain
+        AlertDialog(
+            onDismissRequest = { confirmBrainDownload = false },
+            title = { Text("Download offline action brain?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("${model.subtitle} · ${formatMegabytes(model.sizeBytes)} MB")
+                    Text("This is a third-party FunctionGemma fine-tune, not a Google-hosted model. Source: ${model.source}.")
+                    Text("Gemma Terms of Use apply: ${model.licenseUrl}")
+                    if (!actionBrainEngine.meetsRecommendedMemory) {
+                        Text("This device has less than 4 GB RAM; the download and activation are disabled.")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmBrainDownload = false
+                        feedback = if (actionBrainEngine.download()) null else "Action brain download could not start."
+                    },
+                    enabled = actionBrainEngine.meetsRecommendedMemory,
+                ) { Text("Accept terms & download", maxLines = 1, softWrap = false) }
+            },
+            dismissButton = { TextButton(onClick = { confirmBrainDownload = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (confirmBrainUninstall) {
+        AlertDialog(
+            onDismissRequest = { confirmBrainUninstall = false },
+            title = { Text("Remove offline action brain?") },
+            text = { Text("ZERO will unload the LiteRT-LM engine before deleting the downloaded model and cache.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmBrainUninstall = false
+                    coroutineScope.launch {
+                        feedback = if (actionBrainEngine.uninstall()) {
+                            "Offline action brain removed."
+                        } else {
+                            "Offline action brain could not be removed."
+                        }
+                    }
+                }) { Text("Unload & remove") }
+            },
+            dismissButton = { TextButton(onClick = { confirmBrainUninstall = false }) { Text("Keep model") } },
         )
     }
 
@@ -346,6 +425,103 @@ private fun KokoroModelCard(
                         Button(onClick = onUninstall) { Text("Retry removal", maxLines = 1, softWrap = false) }
                     VoiceModelTransferState.Idle ->
                         Button(onClick = onDownload) { Text("Download", maxLines = 1, softWrap = false) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MobileActionBrainCard(
+    state: MobileActionBrainState,
+    manager: MobileActionBrainEngine,
+    onDownload: () -> Unit,
+    onActivate: () -> Unit,
+    onResume: () -> Unit,
+    onUninstall: () -> Unit,
+) {
+    val model = VoiceModelCatalog.actionBrain
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(model.title, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+            Text(model.subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
+            Text(
+                "${formatMegabytes(model.sizeBytes)} MB · INT8 · ${model.license}",
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                softWrap = false,
+            )
+            Text("Third-party fine-tune · ${model.source}", style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
+            Text("Gemma terms: ${model.licenseUrl}", style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
+            if (!manager.meetsRecommendedMemory) {
+                Text(
+                    "At least 4 GB device RAM is recommended; download and activation are disabled.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+            }
+            when (state) {
+                MobileActionBrainState.Idle -> Text("Not downloaded", maxLines = 1, softWrap = false)
+                is MobileActionBrainState.Downloading -> {
+                    val progress = if (state.totalBytes > 0) state.receivedBytes.toFloat() / state.totalBytes else 0f
+                    LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "${formatMegabytes(state.receivedBytes)} / ${formatMegabytes(state.totalBytes)} MB",
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+                MobileActionBrainState.Paused -> Text("Download paused", maxLines = 1, softWrap = false)
+                MobileActionBrainState.Loading -> Text("Loading on-device model…", maxLines = 1, softWrap = false)
+                MobileActionBrainState.Installed -> Text("Downloaded · not active", maxLines = 1, softWrap = false)
+                MobileActionBrainState.Active -> Text("Downloaded · active", maxLines = 1, softWrap = false)
+                MobileActionBrainState.Removing -> Text("Unloading and removing…", maxLines = 1, softWrap = false)
+                is MobileActionBrainState.Failed -> Text(
+                    "Unavailable: ${state.message}",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    softWrap = false,
+                )
+                is MobileActionBrainState.RemoveFailed -> Text(state.message, maxLines = 1, softWrap = false)
+                MobileActionBrainState.Cancelled -> Text("Download cancelled", maxLines = 1, softWrap = false)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (state) {
+                    is MobileActionBrainState.Downloading -> {
+                        OutlinedButton(onClick = manager::pause) { Text("Pause", maxLines = 1, softWrap = false) }
+                        OutlinedButton(onClick = manager::cancel) { Text("Cancel", maxLines = 1, softWrap = false) }
+                    }
+                    MobileActionBrainState.Paused -> {
+                        Button(onClick = onResume) { Text("Resume", maxLines = 1, softWrap = false) }
+                        OutlinedButton(onClick = manager::cancel) { Text("Cancel", maxLines = 1, softWrap = false) }
+                    }
+                    MobileActionBrainState.Loading, MobileActionBrainState.Removing -> Unit
+                    MobileActionBrainState.Installed, MobileActionBrainState.Active -> {
+                        if (manager.meetsRecommendedMemory && state != MobileActionBrainState.Active) {
+                            Button(onClick = onActivate) { Text("Activate", maxLines = 1, softWrap = false) }
+                        }
+                        OutlinedButton(onClick = onUninstall) { Text("Remove", maxLines = 1, softWrap = false) }
+                    }
+                    is MobileActionBrainState.Failed -> {
+                        if (manager.isInstalled()) {
+                            Button(onClick = onActivate, enabled = manager.meetsRecommendedMemory) {
+                                Text("Retry activation", maxLines = 1, softWrap = false)
+                            }
+                            OutlinedButton(onClick = onUninstall) { Text("Remove", maxLines = 1, softWrap = false) }
+                        } else {
+                            Button(onClick = onDownload, enabled = manager.meetsRecommendedMemory) {
+                                Text("Retry download", maxLines = 1, softWrap = false)
+                            }
+                        }
+                    }
+                    is MobileActionBrainState.RemoveFailed ->
+                        Button(onClick = onUninstall) { Text("Retry removal", maxLines = 1, softWrap = false) }
+                    MobileActionBrainState.Idle, MobileActionBrainState.Cancelled ->
+                        Button(onClick = onDownload, enabled = manager.meetsRecommendedMemory) {
+                            Text(if (state == MobileActionBrainState.Idle) "Download" else "Retry download", maxLines = 1, softWrap = false)
+                        }
                 }
             }
         }

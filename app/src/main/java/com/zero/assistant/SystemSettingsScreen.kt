@@ -26,6 +26,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -44,6 +45,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zero.assistant.core.ShakeSensitivity
+import com.zero.assistant.core.AssistantAction
+import com.zero.assistant.core.AssistantTrigger
 import com.zero.assistant.core.SpeechLanguage
 import com.zero.assistant.core.SpeechOutputStatus
 import com.zero.assistant.core.WakePhrase
@@ -51,6 +54,7 @@ import com.zero.assistant.core.WakePhraseConfiguration
 import com.zero.assistant.core.AiProviderContract
 import com.zero.assistant.data.AiProviderSettings
 import com.zero.assistant.data.HardwareActivationSettings
+import com.zero.assistant.data.AssistantActionSettings
 import com.zero.assistant.data.OverlayDesignStyle
 import com.zero.assistant.data.OverlayPreferencesRepository
 import com.zero.assistant.data.WakeWordSettings
@@ -96,6 +100,7 @@ internal fun CapsuleSettingsScreen(
     val context = LocalContext.current
     var volumeShortcut by remember { mutableStateOf(HardwareActivationSettings.volumePairEnabled(context)) }
     var doubleShake by remember { mutableStateOf(HardwareActivationSettings.doubleShakeEnabled(context)) }
+    var backTapsEnabled by remember { mutableStateOf(AssistantActionSettings.backTapsEnabled(context)) }
     val accessibilityPreferences = remember {
         context.getSharedPreferences("zero_accessibility", Context.MODE_PRIVATE)
     }
@@ -240,6 +245,19 @@ internal fun CapsuleSettingsScreen(
                     }
                 }
                 SettingsSection.WakePhrases -> {
+                    SettingsPanel {
+                        Text("Microphone, call & location privacy", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Speech recognition runs on-device. ZERO pauses wake listening while another app records or a phone call is active.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "Answer/end call controls require Android's Answer phone calls permission. Weather uses location only when location permission is granted; otherwise say a city.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     SettingsPanel {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
@@ -388,7 +406,7 @@ internal fun CapsuleSettingsScreen(
                 SettingsSection.HardwareEdge -> {
                     SettingsToggle(
                         "Volume Up + Down Shortcut",
-                        "Enable ZERO in Android Accessibility settings to use this shortcut.",
+                        "Enabled here, then select ZERO as Android's Accessibility shortcut. Volume keys are never consumed.",
                         volumeShortcut,
                         onCheckedChange = { enabled ->
                             volumeShortcut = enabled
@@ -398,6 +416,23 @@ internal fun CapsuleSettingsScreen(
                             }.onFailure { systemActionError = it.message ?: "Android accessibility settings could not be opened." }
                         },
                     )
+                    SettingsToggle(
+                        "Back-Tap 2x / 3x / 4x",
+                        "Experimental accelerometer gestures; requires an accelerometer and Android camera permission for the foreground sensor service.",
+                        backTapsEnabled,
+                        onCheckedChange = { enabled ->
+                            backTapsEnabled = enabled
+                            AssistantActionSettings.setBackTapsEnabled(context, enabled)
+                            if (enabled && androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                                onRequestShakeCameraPermission()
+                            } else {
+                                AssistantActionSettings.syncGestureService(context)
+                                    .onFailure { systemActionError = it.message ?: "Gesture service could not be updated." }
+                            }
+                        },
+                    )
+                    TriggerActionSettingsPanel()
+                    TextButton(onClick = { onNavigate(Page.TriggerTest) }) { Text("Gesture & Shortcut Test") }
                     SettingsToggle(
                         "Assistant Edge Panel",
                         "Show the interactive overlay after a wake phrase over other apps.",
@@ -457,8 +492,8 @@ internal fun CapsuleSettingsScreen(
                         )
                     }
                     SettingsToggle(
-                        "Double-Shake Flashlight",
-                        "Requires camera permission, an accelerometer and a torch.",
+                        "Double-Shake Trigger",
+                        "Requires Android camera permission for its foreground sensor service and an accelerometer.",
                         doubleShake,
                         onCheckedChange = { enabled ->
                             HardwareActivationSettings.setDoubleShakeEnabled(context, enabled)
@@ -466,11 +501,8 @@ internal fun CapsuleSettingsScreen(
                             if (enabled && androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                                 onRequestShakeCameraPermission()
                             } else {
-                                val intent = Intent(context, com.zero.assistant.data.DoubleShakeService::class.java)
-                                    .setAction(if (enabled) com.zero.assistant.data.DoubleShakeService.ACTION_START else com.zero.assistant.data.DoubleShakeService.ACTION_STOP)
-                                runCatching {
-                                    if (enabled) androidx.core.content.ContextCompat.startForegroundService(context, intent) else context.startService(intent)
-                                }.onFailure { systemActionError = it.message ?: "The flashlight service could not be updated." }
+                                AssistantActionSettings.syncGestureService(context)
+                                    .onFailure { systemActionError = it.message ?: "The gesture service could not be updated." }
                             }
                         },
                     )
@@ -490,6 +522,7 @@ internal fun CapsuleSettingsScreen(
                             },
                         )
                     }
+
                 }
                 SettingsSection.OnlineSystem -> {
                     SettingsToggle(
@@ -570,7 +603,6 @@ internal fun CapsuleSettingsScreen(
                         Text("Version 17.07.2007 · Made by @Shree", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                SettingsSection.Hub -> Unit
             }
         }
     }
@@ -597,6 +629,49 @@ internal fun CapsuleSettingsScreen(
                 }) { Text("Save", maxLines = 1, softWrap = false) }
             },
             dismissButton = { TextButton(onClick = { phraseEditorVisible = false }) { Text("Cancel", maxLines = 1, softWrap = false) } },
+        )
+    }
+}
+
+@Composable
+private fun TriggerActionSettingsPanel() {
+    val context = LocalContext.current
+    var actions by remember {
+        mutableStateOf(AssistantTrigger.entries.associateWith { AssistantActionSettings.actionFor(context, it) })
+    }
+    SettingsPanel {
+        Text("Action mappings", fontWeight = FontWeight.Bold)
+        AssistantTrigger.entries.forEach { trigger ->
+            var expanded by remember(trigger) { mutableStateOf(false) }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(trigger.label, modifier = Modifier.weight(1f), maxLines = 1, softWrap = false)
+                Box {
+                    OutlinedButton(onClick = { expanded = true }) {
+                        Text(actions[trigger]?.label ?: trigger.defaultAction.label, maxLines = 1, softWrap = false)
+                    }
+                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        AssistantAction.entries.forEach { action ->
+                            DropdownMenuItem(
+                                text = { Text(action.label, maxLines = 1, softWrap = false) },
+                                onClick = {
+                                    expanded = false
+                                    AssistantActionSettings.setAction(context, trigger, action)
+                                    actions = actions + (trigger to action)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Text(
+            "Voice mapping runs when you say “run my voice action.” Calls open the dialer for review; emergency SMS is not satellite service.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
         )
     }
 }

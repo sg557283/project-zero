@@ -41,12 +41,12 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.ViewModelStoreOwner
-import androidx.lifecycle.ViewTreeLifecycleOwner
-import androidx.lifecycle.ViewTreeViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
-import androidx.savedstate.ViewTreeSavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.zero.assistant.BotFaceMode
 import com.zero.assistant.DotMatrixBotFace
 import com.zero.assistant.ui.OverlayBridgeShape
@@ -108,9 +108,9 @@ internal class AssistantOverlayService(private val service: AccessibilityService
         val lifecycleOwner = OverlayLifecycleOwner().also { owner = it }
         return ComposeView(service).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
-            ViewTreeLifecycleOwner.set(this, lifecycleOwner)
-            ViewTreeSavedStateRegistryOwner.set(this, lifecycleOwner)
-            ViewTreeViewModelStoreOwner.set(this, lifecycleOwner)
+            setViewTreeLifecycleOwner(lifecycleOwner)
+            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
+            setViewTreeViewModelStoreOwner(lifecycleOwner)
         }
     }
 

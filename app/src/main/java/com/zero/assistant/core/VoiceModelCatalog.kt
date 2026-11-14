@@ -24,6 +24,18 @@ object VoiceModelCatalog {
     const val KOKORO_ID = "kokoro-int8-multi-lang-v1-0"
     const val KOKORO_SHA256 = "72c347230107ef8a31098ec4d468a605244beef5f1ed00db97efa13518800653"
 
+    val actionBrain = MobileActionBrainSpec(
+        id = "functiongemma-270m-mobile-actions",
+        title = "FunctionGemma 270M • Mobile Action Brain",
+        subtitle = "Google AI Edge • Offline Device & App Control (~289 MB INT8)",
+        downloadUrl = "https://huggingface.co/JackJ1/functiongemma-270m-it-mobile-actions-litertlm/resolve/5d08507ee504b40476f8ab68486050837a093003/mobile-actions_q8_ekv1024.litertlm",
+        sizeBytes = 284_426_240L,
+        sha256 = "510c8257d1f9d12b5be630b5d6a593732e10896e9ee0b3f3d20b2eebff8e1b13",
+        source = "JackJ1/functiongemma-270m-it-mobile-actions-litertlm",
+        license = "Gemma Terms of Use",
+        licenseUrl = "https://ai.google.dev/gemma/terms",
+    )
+
     val models = listOf(
         VoiceModelSpec(
             id = KOKORO_ID,
@@ -42,6 +54,18 @@ object VoiceModelCatalog {
 
     fun model(id: String): VoiceModelSpec? = models.firstOrNull { it.id == id }
 }
+
+data class MobileActionBrainSpec(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val downloadUrl: String,
+    val sizeBytes: Long,
+    val sha256: String,
+    val source: String,
+    val license: String,
+    val licenseUrl: String,
+)
 
 sealed interface VoiceModelTransferState {
     data object Idle : VoiceModelTransferState

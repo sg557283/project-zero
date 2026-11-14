@@ -10,6 +10,7 @@ enum class SpeechLanguage(val tag: String, val label: String) {
 enum class VoiceLibraryCategory(val label: String) {
     Simple("Simple"),
     EmotionBased("Emotion-Based"),
+    OfflineAI("Offline AI"),
 }
 
 data class OfflineTtsVoice(

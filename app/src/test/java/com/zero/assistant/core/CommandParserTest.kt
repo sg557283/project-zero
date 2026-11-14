@@ -95,6 +95,39 @@ class CommandParserTest {
         assertEquals(AssistantCommand.SaveNote("buy milk"), CommandParser.parse("note save karo buy milk"))
     }
 
+    @Test fun resolvesAppAndDeviceAliasesBeforeParsing() {
+        assertEquals(AssistantCommand.OpenApp(AppTarget.YouTube), CommandParser.parse("Open why tee"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Instagram), CommandParser.parse("Open inshta"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.WhatsApp), CommandParser.parse("WA kholo"))
+        assertEquals(AssistantCommand.SetFlashlight(true), CommandParser.parse("Torche on karo"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Facebook), CommandParser.parse("FB"))
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Gallery), CommandParser.parse("photos kholo"))
+    }
+
+    @Test fun parsesCallControlPhrases() {
+        assertEquals(
+            AssistantCommand.CallControl(CallControlAction.Answer),
+            CommandParser.parse("Call uthao"),
+        )
+        assertEquals(
+            AssistantCommand.CallControl(CallControlAction.End),
+            CommandParser.parse("Disconnect"),
+        )
+        assertEquals(
+            AssistantCommand.CallControl(CallControlAction.SpeakerOn),
+            CommandParser.parse("Speaker on karo"),
+        )
+        assertEquals(AssistantCommand.DraftCallContact("Mamma"), CommandParser.parse("Call Mamma"))
+    }
+
+    @Test fun parsesWeatherAndMultitaskVideoSearchCommands() {
+        assertEquals(AssistantCommand.Weather(null), CommandParser.parse("Weather batao"))
+        assertEquals(AssistantCommand.Weather("Delhi"), CommandParser.parse("Live weather in Delhi"))
+        assertEquals(AssistantCommand.SearchYouTube("cooking at home"), CommandParser.parse("Play the video named cooking at home"))
+        assertEquals(AssistantCommand.SetAudioMuted(true), CommandParser.parse("volume mute karo"))
+        assertEquals(AssistantCommand.SetAudioMuted(true), CommandParser.parse("Awaz band karo"))
+    }
+
     @Test fun parsesHelpAndUnsupportedInput() {
         assertEquals(AssistantCommand.Help, CommandParser.parse("help"))
         assertEquals(AssistantCommand.Unsupported, CommandParser.parse(""))

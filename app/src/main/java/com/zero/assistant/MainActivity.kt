@@ -105,6 +105,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.zero.assistant.core.AppTarget
 import com.zero.assistant.core.AssistantCommand
+import com.zero.assistant.core.AssistantAction
+import com.zero.assistant.core.AssistantTrigger
 import com.zero.assistant.core.AssistantResponseRoute
 import com.zero.assistant.core.AssistantResponseRouter
 import com.zero.assistant.core.BatteryAlertSettings
@@ -147,6 +149,8 @@ import com.zero.assistant.data.AiProviderSettings
 import com.zero.assistant.data.OpenAiCompatibleProvider
 import com.zero.assistant.data.VaultManager
 import com.zero.assistant.data.HardwareActivationSettings
+import com.zero.assistant.data.AssistantActionSettings
+import com.zero.assistant.data.ActionExecutor
 import com.zero.assistant.core.VaultVisibility
 import com.zero.assistant.data.DoubleShakeService
 import com.zero.assistant.data.TorchController
@@ -165,6 +169,8 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import org.vosk.Recognizer
@@ -180,9 +186,11 @@ class MainActivity : FragmentActivity() {
     private val offlineTtsVoices = mutableStateOf<List<OfflineTtsVoice>>(emptyList())
     private lateinit var speechModelManager: SpeechModelManager
     private lateinit var voiceModelManager: ModelDownloadManager
+    private lateinit var actionBrainEngine: com.zero.assistant.data.MobileActionBrainEngine
     private lateinit var batteryAlertManager: BatteryAlertManager
     private val batteryStatus = mutableStateOf(BatteryStatus(0, false))
     private val pendingVoiceCommand = mutableStateOf<String?>(null)
+    private val pendingActionPage = mutableStateOf<String?>(null)
     private var recognizer: Recognizer? = null
     private var audioCapture: VoiceAudioCapture? = null
     private val voiceCaptureEffects = VoiceCaptureEffects()
@@ -195,11 +203,13 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingVoiceCommand.value = intent.getStringExtra(WakeWordSettings.EXTRA_COMMAND)
+        pendingActionPage.value = intent.getStringExtra(ActionExecutor.EXTRA_OPEN_PAGE)
         recognitionStateMachine = OfflineRecognitionStateMachine { state ->
             runOnUiThread { offlineRecognitionState.value = state }
         }
         val initialLanguage = if (Locale.getDefault().language == "hi") SpeechLanguage.Hindi else SpeechLanguage.English
         voiceModelManager = ModelDownloadManager(this)
+        actionBrainEngine = com.zero.assistant.data.MobileActionBrainEngine(this)
         speechOutputController = SpeechOutputController(
             KokoroSpeechOutputEngine(AndroidTextToSpeechEngine(applicationContext), voiceModelManager),
         ) { status ->
@@ -218,6 +228,7 @@ class MainActivity : FragmentActivity() {
             ZeroApp(
                 modelManager = speechModelManager,
                 voiceModelManager = voiceModelManager,
+                actionBrainEngine = actionBrainEngine,
                 refreshTtsVoices = {
                     offlineTtsVoices.value = speechOutputController?.availableOfflineVoices().orEmpty()
                 },
@@ -252,6 +263,8 @@ class MainActivity : FragmentActivity() {
                 },
                 voiceCommand = pendingVoiceCommand.value,
                 onVoiceCommandConsumed = { pendingVoiceCommand.value = null },
+                requestedPage = pendingActionPage.value,
+                onPageRequestConsumed = { pendingActionPage.value = null },
             )
         }
     }
@@ -260,6 +273,7 @@ class MainActivity : FragmentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         pendingVoiceCommand.value = intent.getStringExtra(WakeWordSettings.EXTRA_COMMAND)
+        pendingActionPage.value = intent.getStringExtra(ActionExecutor.EXTRA_OPEN_PAGE)
         if (intent.getBooleanExtra(WakeWordSettings.EXTRA_RESUME, false) && WakeWordSettings.enabled(this)) {
             startWakeWordService()
         }
@@ -368,6 +382,7 @@ class MainActivity : FragmentActivity() {
         speechOutputController?.close()
         speechOutputController = null
         voiceModelManager.close()
+        actionBrainEngine.close()
         speechModelManager.close()
         super.onDestroy()
     }
@@ -503,7 +518,7 @@ private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
 }
 
 private data class ChatLine(val fromZero: Boolean, val text: String)
-internal enum class Page { Home, History, Settings, SpeechModels, VoiceStudio, Scanner, Planner, BatteryAlerts, Notes, MyShortcuts, LocalUtilities, Dashboard, Help, Privacy, Terms, Vault, Emergency, Diagnostics }
+internal enum class Page { Home, History, Settings, SpeechModels, VoiceStudio, Scanner, Planner, BatteryAlerts, Notes, MyShortcuts, LocalUtilities, Dashboard, Help, Privacy, Terms, Vault, Emergency, Diagnostics, TriggerTest }
 
 
 private fun isSpeechError(message: String): Boolean =
@@ -529,6 +544,7 @@ private val chatSaver = listSaver<androidx.compose.runtime.snapshots.SnapshotSta
 private fun ZeroApp(
     modelManager: SpeechModelManager,
     voiceModelManager: ModelDownloadManager,
+    actionBrainEngine: com.zero.assistant.data.MobileActionBrainEngine,
     refreshTtsVoices: () -> Unit,
     prepareForVoiceModelRemoval: (() -> Unit) -> Unit,
     speak: (String) -> Unit,
@@ -546,9 +562,12 @@ private fun ZeroApp(
     installTtsVoices: () -> String,
     voiceCommand: String?,
     onVoiceCommandConsumed: () -> Unit,
+    requestedPage: String?,
+    onPageRequestConsumed: () -> Unit,
 ) {
     val context = LocalContext.current
     val history = remember { CommandHistory(PreferencesHistoryStorage(context.applicationContext)) }
+    val conversationMemory = remember { com.zero.assistant.core.ConversationContextMemory() }
     val reminderRepository = remember { ReminderRepository(PlannerPreferences(context.applicationContext)) }
     val reminderScheduler = remember { ReminderScheduler(context.applicationContext, reminderRepository) }
     val productivityPreferences = remember { ProductivityPreferences(context.applicationContext) }
@@ -603,8 +622,11 @@ private fun ZeroApp(
     var pendingFlashlightCommand by remember { mutableStateOf<String?>(null) }
     var pendingShortcutContinuation by remember { mutableStateOf<(() -> Unit)?>(null) }
     var pendingCallNumber by remember { mutableStateOf<String?>(null) }
+    var pendingCallNumberContinuation by remember { mutableStateOf<(() -> Unit)?>(null) }
     var pendingCallContact by remember { mutableStateOf<String?>(null) }
+    var pendingCallContactContinuation by remember { mutableStateOf<(() -> Unit)?>(null) }
     var pendingWhatsAppDraft by remember { mutableStateOf<AssistantCommand.DraftWhatsAppMessage?>(null) }
+    var pendingWhatsAppContinuation by remember { mutableStateOf<(() -> Unit)?>(null) }
     var plannerDraftTitle by remember { mutableStateOf<String?>(null) }
     var plannerVoiceCallback by remember { mutableStateOf<((String) -> Unit)?>(null) }
     var notificationsGranted by remember {
@@ -617,6 +639,7 @@ private fun ZeroApp(
     var onlineRequestJob by remember { mutableStateOf<Job?>(null) }
     val lines = rememberSaveable(saver = chatSaver) { mutableStateListOf(ChatLine(true, "Hi, I'm ZERO. What can I do for you?")) }
     lateinit var dispatchCommand: (String, (() -> Unit)?) -> Unit
+    lateinit var dispatchCommandInternal: (String, (() -> Unit)?, Boolean) -> Unit
 
     DisposableEffect(wakePreferences) {
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -668,24 +691,15 @@ private fun ZeroApp(
         }, { isListening = it })
         else notice = "Microphone permission was denied. Typed commands still work offline."
     }
-    val pendingShakePermission = remember { mutableStateOf(false) }
     val cameraPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val command = pendingFlashlightCommand
         pendingFlashlightCommand = null
         if (granted && command != null) executeCommand(context, command, history, lines, speak, speechOutput) { notice = it }
-        if (pendingShakePermission.value) {
-            pendingShakePermission.value = false
-            if (!granted) HardwareActivationSettings.setDoubleShakeEnabled(context, false)
+        if (granted && AssistantActionSettings.shouldRunGestureService(context) && command == null) {
+            AssistantActionSettings.syncGestureService(context)
+                .onFailure { notice = it.message ?: "Gesture service could not be started." }
         }
-        if (granted && HardwareActivationSettings.doubleShakeEnabled(context) && command == null) {
-            runCatching {
-                ContextCompat.startForegroundService(
-                    context,
-                    Intent(context, DoubleShakeService::class.java).setAction(DoubleShakeService.ACTION_START),
-                )
-            }
-        }
-        else if (!granted) notice = "Camera permission is required to control the flashlight."
+        else if (!granted) notice = "Camera permission was denied; background gesture monitoring cannot start."
         val continuation = pendingShortcutContinuation
         pendingShortcutContinuation = null
         continuation?.invoke()
@@ -694,6 +708,9 @@ private fun ZeroApp(
         val number = pendingCallNumber ?: return@rememberLauncherForActivityResult
         pendingCallNumber = null
         executeCommand(context, "call $number", history, lines, speak, speechOutput, allowDirectCall = granted) { notice = it }
+        val continuation = pendingCallNumberContinuation
+        pendingCallNumberContinuation = null
+        continuation?.invoke()
     }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         notificationsGranted = granted
@@ -762,7 +779,71 @@ private fun ZeroApp(
     }
 
     dispatchCommand = { command, onComplete ->
-        when (val parsed = CommandParser.parse(command)) {
+        dispatchCommandInternal(command, onComplete, true)
+    }
+    dispatchCommandInternal = commandDispatch@{ command, onComplete, allowActionBrain ->
+        if (command.trim().lowercase(Locale.ROOT) in setOf("run my voice action", "run voice action", "voice action")) {
+            val action = AssistantActionSettings.actionFor(context, AssistantTrigger.VOICE)
+            if (action == AssistantAction.AUTO_CLICK_TARGET) {
+                startListening({ spoken ->
+                    if (isSpeechError(spoken)) notice = spoken
+                    else dispatchCommandInternal("click $spoken", onComplete, false)
+                }, { isListening = it })
+                return@commandDispatch
+            }
+            val response = ActionExecutor.execute(context, action)
+            showResult(command, response)
+            onComplete?.invoke()
+            return@commandDispatch
+        }
+        val deterministicCommand = CommandParser.parse(conversationMemory.resolveFollowUp(command))
+        val isCompoundCommand = com.zero.assistant.core.MultitaskCommandExecutor.split(command).size > 1
+        val isInstantCommand = deterministicCommand != AssistantCommand.Unsupported ||
+            OnScreenActionParser.parse(command) != null
+        if (allowActionBrain && actionBrainEngine.isActive && (isCompoundCommand || !isInstantCommand)) {
+            aiRequestScope.launch {
+                try {
+                    val calls = actionBrainEngine.plan(conversationMemory.resolveFollowUp(command))
+                    val plannedCommands = com.zero.assistant.core.MobileActionCommandRouter.toCommands(calls)
+                    if (plannedCommands == null) {
+                        if (calls.isNotEmpty()) {
+                            showResult(command, "The offline action brain returned an unsupported action; trying ZERO's built-in parser.")
+                        }
+                        dispatchCommandInternal(command, onComplete, false)
+                    } else {
+                        val planned = plannedCommands.joinToString(" then ")
+                        dispatchCommandInternal(planned, onComplete, false)
+                    }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    showResult(
+                        command,
+                        "The offline action brain failed (${failure.message ?: "model error"}); trying ZERO's built-in parser.",
+                    )
+                    dispatchCommandInternal(command, onComplete, false)
+                }
+            }
+            return@commandDispatch
+        }
+        val steps = com.zero.assistant.core.MultitaskCommandExecutor.split(command)
+        if (steps.size > 1) {
+            var index = 0
+            fun runNext() {
+                if (index >= steps.size) {
+                    showResult(command, "Completed ${steps.size} command steps.")
+                    onComplete?.invoke()
+                    return
+                }
+                val next = steps[index++]
+                dispatchCommand(next, ::runNext)
+            }
+            runNext()
+            return@commandDispatch
+        }
+        val parsed = CommandParser.parse(conversationMemory.resolveFollowUp(command))
+        conversationMemory.remember(command, parsed)
+        when (parsed) {
             is AssistantCommand.OpenSystemSettings -> {
                 val response = openSettingsTarget(context, parsed.target)
                 showResult(command, response); onComplete?.invoke()
@@ -781,14 +862,23 @@ private fun ZeroApp(
                     showResult(command, response); onComplete?.invoke()
                 }
             }
-            is AssistantCommand.CallNumber -> pendingCallNumber = parsed.number
-            is AssistantCommand.DraftCallContact -> pendingCallContact = parsed.contact
+            is AssistantCommand.CallNumber -> {
+                pendingCallNumber = parsed.number
+                pendingCallNumberContinuation = onComplete
+            }
+            is AssistantCommand.DraftCallContact -> {
+                pendingCallContact = parsed.contact
+                pendingCallContactContinuation = onComplete
+            }
             is AssistantCommand.SearchYouTube -> {
                 val response = openYouTubeSearch(context, parsed.query)
                 showResult(command, response)
                 onComplete?.invoke()
             }
-            is AssistantCommand.DraftWhatsAppMessage -> pendingWhatsAppDraft = parsed
+            is AssistantCommand.DraftWhatsAppMessage -> {
+                pendingWhatsAppDraft = parsed
+                pendingWhatsAppContinuation = onComplete
+            }
             is AssistantCommand.RunShortcut -> {
                 val shortcut = shortcutRepository.all().firstOrNull { it.enabled && it.name.equals(parsed.name, ignoreCase = true) }
                 if (shortcut == null) {
@@ -832,6 +922,30 @@ private fun ZeroApp(
             is AssistantCommand.AdjustVolume -> {
                 showResult(command, adjustMediaVolume(context, parsed.increase))
                 onComplete?.invoke()
+            }
+            is AssistantCommand.SetAudioMuted -> {
+                val audio = context.getSystemService(android.media.AudioManager::class.java)
+                val result = runCatching {
+                    val direction = if (parsed.muted) android.media.AudioManager.ADJUST_MUTE else android.media.AudioManager.ADJUST_UNMUTE
+                    audio?.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, direction, android.media.AudioManager.FLAG_SHOW_UI)
+                    if (audio == null) "Audio controls are unavailable." else if (parsed.muted) "Media sound muted." else "Media sound unmuted."
+                }.getOrElse { "Android could not change media sound: ${it.message ?: "audio unavailable"}." }
+                showResult(command, result)
+                onComplete?.invoke()
+            }
+            is AssistantCommand.CallControl -> {
+                showResult(command, com.zero.assistant.data.CallAssistantManager(context).execute(parsed.action))
+                onComplete?.invoke()
+            }
+            is AssistantCommand.Weather -> {
+                aiRequestScope.launch {
+                    val response = withContext(Dispatchers.IO) {
+                        com.zero.assistant.data.LiveWeatherService(context).forecast(parsed.city)
+                    }
+                    showResult(command, response)
+                    if (speechOutput) speak(response)
+                    onComplete?.invoke()
+                }
             }
             else -> {
                 if (OnScreenActionParser.parse(command) != null) {
@@ -888,6 +1002,12 @@ private fun ZeroApp(
             onVoiceCommandConsumed()
         }
     }
+    LaunchedEffect(requestedPage) {
+        requestedPage?.let { pageName ->
+            runCatching { Page.valueOf(pageName) }.getOrNull()?.let { page = it }
+            onPageRequestConsumed()
+        }
+    }
     LaunchedEffect(speechOutputStatus, selectedTtsVoiceId) {
         val selectedVoiceId = selectedTtsVoiceId
         if (speechOutputStatus is SpeechOutputStatus.Ready && selectedVoiceId != null) {
@@ -919,6 +1039,7 @@ private fun ZeroApp(
                             Page.Vault -> "ZERO Vault"
                             Page.Emergency -> "Emergency Quick Mode"
                             Page.Diagnostics -> "Self-diagnostics"
+                            Page.TriggerTest -> "Gesture & Shortcut Test"
                             else -> page.name
                         },
                         fontWeight = FontWeight.Bold,
@@ -1049,10 +1170,7 @@ private fun ZeroApp(
                     },
                     aiProviderSettings = aiProviderSettings,
                     onNavigate = { navigateTo(it) },
-                    onRequestShakeCameraPermission = {
-                        pendingShakePermission.value = true
-                        cameraPermission.launch(Manifest.permission.CAMERA)
-                    },
+                    onRequestShakeCameraPermission = { cameraPermission.launch(Manifest.permission.CAMERA) },
                     themeMode = themeMode,
                     onThemeMode = { mode ->
                         themeMode = mode
@@ -1069,6 +1187,7 @@ private fun ZeroApp(
                     modifier = Modifier.padding(padding),
                     manager = modelManager,
                     voiceModelManager = voiceModelManager,
+                    actionBrainEngine = actionBrainEngine,
                     refreshTtsVoices = refreshTtsVoices,
                     prepareForVoiceModelRemoval = prepareForVoiceModelRemoval,
                     onModelRemoved = {
@@ -1182,6 +1301,7 @@ private fun ZeroApp(
                 Page.Vault -> VaultScreen(Modifier.padding(padding), vaultManager)
                 Page.Emergency -> EmergencyScreen(Modifier.padding(padding))
                 Page.Diagnostics -> SelfDiagnosticsScreen(Modifier.padding(padding), vaultManager, activeModelId)
+                Page.TriggerTest -> TriggerTestScreen(Modifier.padding(padding))
                 Page.Help -> TextPage(Modifier.padding(padding), "Help and troubleshooting", "Try commands like:\n\n• Open YouTube / YouTube kholo\n• Torch chalu karo / Torch band karo\n• Abhi kitne baje hain? / battery status\n• note buy milk\n• remind me to call Sam, then set its date and time in Planner\n• planner / notes\n• call followed by a phone number (ZERO asks you to confirm)\n\nTo enable background wake listening, open Settings, enable Background wake listening, and grant microphone and notification permissions. Keep the persistent ZERO notification visible; its Stop action ends microphone use. Enabled phrases are supplied to Vosk as a constrained grammar; recognition depends on the selected model's vocabulary and language.\n\nAndroid and device manufacturers may pause or stop microphone use because of battery management, privacy controls, force-stop, or reboot policy. After reboot, Android requires you to tap a notification and reopen ZERO before microphone capture resumes. Battery optimization guidance opens Android system settings. Speech transcripts and actions are handled locally; unsupported or sensitive commands may require review in ZERO.")
                 Page.Privacy -> TextPage(Modifier.padding(padding), "Privacy and permissions", "Typed commands, command execution, history, speech recognition, notes, reminders, shortcuts, and model inference run on this device. ZERO does not upload commands, audio, notes, reminders, or history; it has no account, analytics, or ads. Local records and downloaded models use app-private storage. ZERO does not retain raw audio.\n\nMicrophone capture starts after you tap Mic or explicitly enable wake listening and grant permission. When enabled, the foreground service continues wake recognition after the Home screen closes and shows a persistent notification. Vosk recognition and wake-phrase grammar matching are local. Hindi recognition is bundled; the optional English model is downloaded from the fixed HTTPS URL and checksum in the catalog. Optional online AI sends only a confirmed text query to the configured provider; microphone audio and local history are not sent.\n\nAndroid may interrupt the foreground service or defer notifications because of battery management, permission changes, force-stop, or reboot policy. After reboot, ZERO requires a user tap before microphone access resumes. Android TTS uses an installed voice that reports it does not require a network connection.")
                 Page.Terms -> TextPage(Modifier.padding(padding), "Terms of Use", "ZERO is provided as-is for personal use. Recognition is processed locally using the selected compatible Vosk model. Speech accuracy depends on language, microphone, device performance, and environment; automatic Hinglish recognition is not promised. Android TTS must have a compatible local voice installed. Optional online AI sends text to a provider only after confirmation and requires the user to configure and trust that provider; the provider's own terms and data handling apply. Reminder delivery is inexact and may be delayed or suppressed by Android power management, notification permission, or force-stop. External app launches, flashlight hardware, and calls depend on the device. ZERO confirms a target number before direct-call permission; if permission or calling is unavailable, it opens the dialer for review.")
@@ -1189,7 +1309,10 @@ private fun ZeroApp(
         }
         pendingCallNumber?.let { number ->
             AlertDialog(
-            onDismissRequest = { pendingCallNumber = null },
+                onDismissRequest = {
+                    pendingCallNumber = null
+                    pendingCallNumberContinuation = null
+                },
                 title = { Text("Confirm call") },
                 text = { Text("ZERO is ready to call $number. Confirm that this is the intended number.") },
                 confirmButton = {
@@ -1197,32 +1320,58 @@ private fun ZeroApp(
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
                             pendingCallNumber = null
                             executeCommand(context, "call $number", history, lines, speak, speechOutput, allowDirectCall = true) { notice = it }
+                            val continuation = pendingCallNumberContinuation
+                            pendingCallNumberContinuation = null
+                            continuation?.invoke()
                         } else callPermission.launch(Manifest.permission.CALL_PHONE)
                     }) { Text("Continue") }
                 },
-                dismissButton = { TextButton(onClick = { pendingCallNumber = null }) { Text("Cancel") } },
+                dismissButton = {
+                    TextButton(onClick = {
+                        pendingCallNumber = null
+                        pendingCallNumberContinuation = null
+                    }) { Text("Cancel") }
+                },
             )
         }
         pendingCallContact?.let { contact ->
             AlertDialog(
-                onDismissRequest = { pendingCallContact = null },
+                onDismissRequest = {
+                    pendingCallContact = null
+                    pendingCallContactContinuation = null
+                },
                 title = { Text("Review call request") },
                 text = { Text("ZERO cannot match “$contact” to a saved phone number without contact selection. Continue to the phone app to choose the contact; no call will be placed by ZERO.") },
                 confirmButton = {
                     TextButton(onClick = {
                         pendingCallContact = null
-                        runCatching {
+                        val opened = runCatching {
                             context.startActivity(Intent(Intent.ACTION_DIAL).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                             showResult("Call $contact", "Opened the phone app. Choose $contact and review the number before calling.")
-                        }.onFailure { notice = it.message ?: "The phone app could not be opened." }
+                            true
+                        }.getOrElse {
+                            notice = it.message ?: "The phone app could not be opened."
+                            false
+                        }
+                        val continuation = pendingCallContactContinuation
+                        pendingCallContactContinuation = null
+                        if (opened) continuation?.invoke()
                     }) { Text("Open phone") }
                 },
-                dismissButton = { TextButton(onClick = { pendingCallContact = null }) { Text("Cancel") } },
+                dismissButton = {
+                    TextButton(onClick = {
+                        pendingCallContact = null
+                        pendingCallContactContinuation = null
+                    }) { Text("Cancel") }
+                },
             )
         }
         pendingWhatsAppDraft?.let { draft ->
             AlertDialog(
-                onDismissRequest = { pendingWhatsAppDraft = null },
+                onDismissRequest = {
+                    pendingWhatsAppDraft = null
+                    pendingWhatsAppContinuation = null
+                },
                 title = { Text("Review WhatsApp message") },
                 text = { Text("Open WhatsApp with this draft for ${draft.contact}? You will choose the conversation and press Send in WhatsApp.\n\n${draft.message}") },
                 confirmButton = {
@@ -1234,15 +1383,25 @@ private fun ZeroApp(
                             setPackage("com.whatsapp")
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        runCatching {
+                        val opened = runCatching {
                             context.startActivity(Intent.createChooser(shareIntent, "Choose WhatsApp conversation"))
                             showResult("WhatsApp message draft for ${draft.contact}", "Opened the WhatsApp draft. Select ${draft.contact} and tap Send to send the message.")
-                        }.onFailure {
+                            true
+                        }.getOrElse {
                             notice = "WhatsApp could not open the message draft. No message was sent."
+                            false
                         }
+                        val continuation = pendingWhatsAppContinuation
+                        pendingWhatsAppContinuation = null
+                        if (opened) continuation?.invoke()
                     }) { Text("Open draft") }
                 },
-                dismissButton = { TextButton(onClick = { pendingWhatsAppDraft = null }) { Text("Cancel") } },
+                dismissButton = {
+                    TextButton(onClick = {
+                        pendingWhatsAppDraft = null
+                        pendingWhatsAppContinuation = null
+                    }) { Text("Cancel") }
+                },
             )
         }
         pendingOnlineQuestion?.let { query ->
@@ -1824,10 +1983,8 @@ private fun SettingsScreen(
                 onRequestShakeCameraPermission()
                 return@SettingSwitch
             }
-            val shakeIntent = Intent(context, DoubleShakeService::class.java).setAction(if (enabled) DoubleShakeService.ACTION_START else DoubleShakeService.ACTION_STOP)
-            runCatching {
-                if (enabled) ContextCompat.startForegroundService(context, shakeIntent) else context.startService(shakeIntent)
-            }
+            AssistantActionSettings.syncGestureService(context)
+                .onFailure { notice = it.message ?: "The gesture service could not be updated." }
         })
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ShakeSensitivity.values().forEach { sensitivity ->
@@ -1925,6 +2082,16 @@ private fun executeCommand(
         }
         is AssistantCommand.SetFlashlight -> setFlashlight(context, command.enabled)
         is AssistantCommand.AdjustVolume -> adjustMediaVolume(context, command.increase)
+        is AssistantCommand.SetAudioMuted -> {
+            val audio = context.getSystemService(android.media.AudioManager::class.java)
+            val direction = if (command.muted) android.media.AudioManager.ADJUST_MUTE else android.media.AudioManager.ADJUST_UNMUTE
+            runCatching {
+                audio?.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, direction, 0)
+                if (audio == null) "Audio controls are unavailable." else if (command.muted) "Media sound muted." else "Media sound unmuted."
+            }.getOrElse { "Android could not change media sound: ${it.message ?: "audio unavailable"}." }
+        }
+        is AssistantCommand.CallControl -> com.zero.assistant.data.CallAssistantManager(context).execute(command.action)
+        is AssistantCommand.Weather -> "Weather requests are available from the voice command dispatcher."
         AssistantCommand.ToggleFlashlight -> toggleFlashlight(context)
         is AssistantCommand.CallNumber -> callNumber(context, command.number, allowDirectCall)
         is AssistantCommand.DraftCallContact -> "Choose a contact in the phone app; ZERO does not read contacts or place calls by name."
@@ -2083,6 +2250,8 @@ private fun openApp(context: Context, app: AppTarget): String {
         AppTarget.Settings -> Intent(Settings.ACTION_SETTINGS)
         AppTarget.Camera -> Intent(MediaStore.ACTION_IMAGE_CAPTURE)
         AppTarget.YouTube -> launcherIntent(context, "com.google.android.youtube") ?: Intent(Intent.ACTION_VIEW, Uri.parse("https://youtube.com")).addCategory(Intent.CATEGORY_BROWSABLE)
+        AppTarget.Facebook -> launcherIntent(context, "com.facebook.katana")
+        AppTarget.Instagram -> launcherIntent(context, "com.instagram.android")
         AppTarget.WhatsApp -> launcherIntent(context, "com.whatsapp")
         AppTarget.Music -> launcherIntent(context, "com.spotify.music")
             ?: launcherIntent(context, "com.google.android.music")
@@ -2092,6 +2261,7 @@ private fun openApp(context: Context, app: AppTarget): String {
         AppTarget.Phone -> Intent(Intent.ACTION_DIAL)
         AppTarget.Messages -> Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_MESSAGING)
         AppTarget.Calculator -> launcherIntent(context, "com.google.android.calculator") ?: launcherIntent(context, "com.android.calculator2")
+        AppTarget.Gallery -> Intent(Intent.ACTION_GET_CONTENT).setType("image/*")
         AppTarget.Scanner, AppTarget.Notes, AppTarget.Vault -> null
     } ?: return "That app isn't available on this device."
     if (intent.resolveActivity(context.packageManager) == null) return "That app isn't available on this device."

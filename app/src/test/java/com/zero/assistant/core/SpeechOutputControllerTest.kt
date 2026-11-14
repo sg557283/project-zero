@@ -66,8 +66,8 @@ class SpeechOutputControllerTest {
     }
 
     @Test
-    fun voiceLibraryHasExactlyTheTwoRequiredCategories() {
-        assertEquals(listOf("Simple", "Emotion-Based"), VoiceLibraryCategory.entries.map { it.label })
+    fun voiceLibraryIncludesTheOfflineActionBrainCategory() {
+        assertEquals(listOf("Simple", "Emotion-Based", "Offline AI"), VoiceLibraryCategory.entries.map { it.label })
     }
 
     @Test

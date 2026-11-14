@@ -11,21 +11,27 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import androidx.core.content.ContextCompat
 import com.zero.assistant.core.HardwareActivationDebouncer
 import com.zero.assistant.core.OnScreenAction
 import com.zero.assistant.core.OnScreenActionParser
+import com.zero.assistant.core.AssistantTrigger
 import com.zero.assistant.BotFaceMode
 import java.util.ArrayDeque
+import java.util.Locale
 
 open class ZeroAccessibilityService : AccessibilityService() {
     private lateinit var edgePanel: AssistantOverlayService
-    private var volumeUpDown = false
-    private var lastVolumeDown = 0L
+    private var volumeUpPressed = false
+    private var volumeDownPressed = false
+    private var volumePairLatched = false
     private var lastActivation = -2_000L
     private var pendingSensitiveText: String? = null
     private var pendingSensitivePackage: String? = null
     private var pendingSensitiveFieldId: String? = null
+    private var screenReaderTts: TextToSpeech? = null
+    private var screenReaderReady = false
     private val assistantPanelReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (!::edgePanel.isInitialized) return
@@ -55,6 +61,15 @@ open class ZeroAccessibilityService : AccessibilityService() {
 
     override fun onCreate() {
         super.onCreate()
+        screenReaderTts = TextToSpeech(applicationContext) { status ->
+            val engine = screenReaderTts ?: return@TextToSpeech
+            val voice = engine.voices.orEmpty()
+                .filterNot { it.isNetworkConnectionRequired }
+                .firstOrNull { it.locale.language == Locale.getDefault().language }
+                ?: engine.voices.orEmpty().firstOrNull { !it.isNetworkConnectionRequired }
+            screenReaderReady = status == TextToSpeech.SUCCESS &&
+                voice != null && runCatching { engine.voice = voice }.isSuccess
+        }
         edgePanel = AssistantOverlayService(this)
         ContextCompat.registerReceiver(
             this,
@@ -81,30 +96,40 @@ open class ZeroAccessibilityService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent?): Boolean {
         if (!HardwareActivationSettings.volumePairEnabled(this) || event == null) return false
-        val now = System.currentTimeMillis()
         val isVolumeUp = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP
         val isVolumeDown = event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-        if (event.action == KeyEvent.ACTION_DOWN && isVolumeUp && volumeUpDown) {
-            volumeUpDown = false
-            if (HardwareActivationDebouncer.accept(now, lastActivation)) activateAssistant()
-            return false
-        }
-        if (event.action == KeyEvent.ACTION_DOWN && isVolumeDown) {
-            volumeUpDown = true
-            lastVolumeDown = now
-        } else if (event.action == KeyEvent.ACTION_UP && isVolumeDown) {
-            if (now - lastVolumeDown > 1_200L) volumeUpDown = false
-        } else if (isVolumeUp || isVolumeDown) {
-            volumeUpDown = false
+        if (!isVolumeUp && !isVolumeDown) return false
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            if (isVolumeUp) volumeUpPressed = true else volumeDownPressed = true
+            if (volumeUpPressed && volumeDownPressed && !volumePairLatched) {
+                volumePairLatched = true
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (HardwareActivationDebouncer.accept(now, lastActivation)) activateVolumeTrigger(now)
+            }
+        } else if (event.action == KeyEvent.ACTION_UP) {
+            if (isVolumeUp) volumeUpPressed = false else volumeDownPressed = false
+            if (!volumeUpPressed && !volumeDownPressed) volumePairLatched = false
         }
         return false
     }
 
-    private fun activateAssistant() {
-        lastActivation = System.currentTimeMillis()
-        ContextCompat.startForegroundService(this, Intent(this, WakeWordService::class.java).apply {
-            action = WakeWordSettings.ACTION_ACTIVATE
-        })
+    private fun activateVolumeTrigger(now: Long) {
+        lastActivation = now
+        if (AssistantActionSettings.testModeEnabled(this)) {
+            val message = "${AssistantTrigger.VOLUME_UP_DOWN.label} detected."
+            screenReaderTts?.takeIf { screenReaderReady }
+                ?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "zero-trigger-test")
+            sendBroadcast(
+                Intent(ActionExecutor.ACTION_TRIGGER_TEST_FEEDBACK)
+                    .setPackage(packageName)
+                    .putExtra(ActionExecutor.EXTRA_TRIGGER_TEST_MESSAGE, message),
+            )
+        } else {
+            ActionExecutor.execute(this, AssistantActionSettings.actionFor(this, AssistantTrigger.VOLUME_UP_DOWN)) { message ->
+                screenReaderTts?.takeIf { screenReaderReady }
+                    ?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "zero-trigger-feedback")
+            }
+        }
     }
 
     private fun handleOnScreenAction(commandText: String) {
@@ -163,6 +188,8 @@ open class ZeroAccessibilityService : AccessibilityService() {
             OnScreenAction.PlayPause -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, "Toggled music.")
             OnScreenAction.NextTrack -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT, "Skipped to the next track.")
             OnScreenAction.PreviousTrack -> dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS, "Returned to the previous track.")
+            OnScreenAction.ReadScreen -> readActiveScreen(summarize = false)
+            OnScreenAction.SummarizeScreen -> readActiveScreen(summarize = true)
             is OnScreenAction.TypeText -> return typeIntoFocusedField(action.text)
         }
         WakeWordSettings.updateAssistantPanel(
@@ -175,6 +202,28 @@ open class ZeroAccessibilityService : AccessibilityService() {
                 else -> BotFaceMode.Success.name
             },
         )
+    }
+
+    private fun readActiveScreen(summarize: Boolean): String {
+        val visibleText = findNodes(rootInActiveWindow)
+            .asSequence()
+            .filter { it.isVisibleToUser }
+            .flatMap { sequenceOf(it.text, it.contentDescription) }
+            .mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotBlank) }
+            .distinct()
+            .take(if (summarize) 6 else 12)
+            .joinToString(". ")
+            .take(MAX_SCREEN_READING_CHARS)
+        if (visibleText.isBlank()) return "There is no readable text on the active screen."
+        val spoken = if (summarize) visibleText.substringBeforeLast(". ", visibleText) else visibleText
+        if (screenReaderReady) {
+            screenReaderTts?.speak(spoken, TextToSpeech.QUEUE_FLUSH, null, "zero-screen-reader")
+        }
+        return if (screenReaderReady) {
+            if (summarize) "Screen summary: $spoken" else "Reading screen: $spoken"
+        } else {
+            "Offline text-to-speech is unavailable. Visible text: $spoken"
+        }
     }
 
     private fun typeIntoFocusedField(text: String) {
@@ -297,15 +346,23 @@ open class ZeroAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
-    override fun onInterrupt() { volumeUpDown = false }
+    override fun onInterrupt() {
+        volumeUpPressed = false
+        volumeDownPressed = false
+        volumePairLatched = false
+    }
 
     override fun onDestroy() {
         unregisterReceiver(assistantPanelReceiver)
         edgePanel.dismiss()
+        screenReaderTts?.stop()
+        screenReaderTts?.shutdown()
+        screenReaderTts = null
         super.onDestroy()
     }
 
     private companion object {
+        const val MAX_SCREEN_READING_CHARS = 600
         val SENSITIVE_MESSAGE_PACKAGES = setOf(
             "com.whatsapp",
             "com.whatsapp.w4b",

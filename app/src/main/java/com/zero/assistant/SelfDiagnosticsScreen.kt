@@ -46,6 +46,7 @@ internal fun SelfDiagnosticsScreen(modifier: Modifier, vaultManager: VaultManage
                 Text("Fix: ${check.fix}", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
             } }
         }
+        StorageAuditPanel()
         Button(onClick = { revision++ }) { Text("Refresh diagnostics") }
         Button(onClick = { context.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${context.packageName}"))) }) { Text("Open app permission settings") }
     }

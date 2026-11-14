@@ -5,6 +5,13 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class OnScreenActionParserTest {
+    @Test fun recognizesExplicitReadAndSummarizeScreenCommands() {
+        assertEquals(OnScreenAction.ReadScreen, OnScreenActionParser.parse("Read screen"))
+        assertEquals(OnScreenAction.ReadScreen, OnScreenActionParser.parse("Screen padho"))
+        assertEquals(OnScreenAction.SummarizeScreen, OnScreenActionParser.parse("Summarize this"))
+        assertEquals(OnScreenAction.SummarizeScreen, OnScreenActionParser.parse("Isko short me samjhao"))
+    }
+
     @Test
     fun parsesScreenActionsAndPreservesTypedText() {
         assertEquals(OnScreenAction.Click("Send"), OnScreenActionParser.parse("Tap Send"))
