@@ -1751,6 +1751,7 @@ private fun SettingsScreen(
     val context = LocalContext.current
     var volumeShortcut by remember { mutableStateOf(HardwareActivationSettings.volumePairEnabled(context)) }
     var doubleShake by remember { mutableStateOf(HardwareActivationSettings.doubleShakeEnabled(context)) }
+    var systemActionError by remember { mutableStateOf<String?>(null) }
     val accessibilityPreferences = remember {
         context.getSharedPreferences("zero_accessibility", Context.MODE_PRIVATE)
     }
@@ -1984,8 +1985,9 @@ private fun SettingsScreen(
                 return@SettingSwitch
             }
             AssistantActionSettings.syncGestureService(context)
-                .onFailure { notice = it.message ?: "The gesture service could not be updated." }
+                .onFailure { systemActionError = it.message ?: "The gesture service could not be updated." }
         })
+        systemActionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ShakeSensitivity.values().forEach { sensitivity ->
                 FilterChip(selected = shakeSensitivity == sensitivity, onClick = {
