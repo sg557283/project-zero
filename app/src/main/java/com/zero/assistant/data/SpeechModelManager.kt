@@ -119,11 +119,16 @@ class SpeechModelManager(context: Context) : AutoCloseable {
     fun activate(modelId: String): Boolean = runCatching {
         store.activate(modelId)
         mutableActiveModel.value = modelId
+        WakeWordSettings.notifySpeechModelChanged(appContext)
     }.isSuccess
 
+    fun currentActiveModelId(): String? = store.activeModelId()
+
     fun uninstall(modelId: String): Boolean = runCatching {
+        val previousActive = store.activeModelId()
         store.uninstall(modelId)
         mutableActiveModel.value = store.activeModelId()
+        if (previousActive != mutableActiveModel.value) WakeWordSettings.notifySpeechModelChanged(appContext)
         publish(modelId, ModelTransferState.Idle)
     }.isSuccess
 
@@ -135,6 +140,7 @@ class SpeechModelManager(context: Context) : AutoCloseable {
 
     fun loadActiveModel(onComplete: (Result<Model>) -> Unit) {
         val id = store.activeModelId()
+        mutableActiveModel.value = id
         if (id == null) {
             mainHandler.post { onComplete(Result.failure(IllegalStateException("Install a speech model before using the microphone"))) }
             return
@@ -235,7 +241,9 @@ class SpeechModelManager(context: Context) : AutoCloseable {
     private fun complete(spec: SpeechModelSpec, result: ModelTransferState) {
         transferMachine.finish(spec.id, result)
         publish(spec.id, result)
+        val previousActive = mutableActiveModel.value
         mutableActiveModel.value = store.activeModelId()
+        if (previousActive != mutableActiveModel.value) WakeWordSettings.notifySpeechModelChanged(appContext)
         synchronized(this) {
             if (activeDownloadId == spec.id) {
                 activeConnection = null
@@ -267,6 +275,7 @@ class SpeechModelManager(context: Context) : AutoCloseable {
     companion object {
         const val HINDI_MODEL_ID = "vosk-hi-small-0.22"
         const val ENGLISH_MODEL_ID = "vosk-en-us-small-0.15"
+        const val INDIAN_ENGLISH_MODEL_ID = "vosk-en-in-small-0.4"
         private const val CATALOG_ASSET = "speech-models.json"
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 30_000

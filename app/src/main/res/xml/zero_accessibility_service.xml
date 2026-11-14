@@ -4,6 +4,6 @@
     android:accessibilityEventTypes=""
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRequestFilterKeyEvents="true"
-    android:canRetrieveWindowContent="false"
+    android:canRetrieveWindowContent="true"
     android:notificationTimeout="100"
     android:settingsActivity="com.zero.assistant.MainActivity" />

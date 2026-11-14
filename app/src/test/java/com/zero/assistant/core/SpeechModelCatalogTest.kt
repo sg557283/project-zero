@@ -1,5 +1,6 @@
 package com.zero.assistant.core
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -7,6 +8,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SpeechModelCatalogTest {
+    @Test
+    fun officialIndianEnglishMobileModelHasVerifiedArchiveMetadata() {
+        val catalogFile = File("src/main/assets/speech-models.json")
+        val catalog = SpeechModelCatalogParser.parse(catalogFile.readText())
+        val model = requireNotNull(catalog.model("vosk-en-in-small-0.4"))
+
+        assertEquals("en-IN", model.language)
+        assertEquals(37_573_330L, model.archiveSizeBytes)
+        assertEquals(
+            "20663dcac4d5cb783a579c54d98339344a688e4ec6e1b4a4b059fd1235454cc7",
+            model.sha256,
+        )
+        assertEquals(
+            "https://alphacephei.com/vosk/models/vosk-model-small-en-in-0.4.zip",
+            model.sourceUrl,
+        )
+    }
+
     @Test
     fun parsesCuratedBundledHindiAndDownloadableEnglishModels() {
         val catalog = SpeechModelCatalogParser.parse(catalogJson())

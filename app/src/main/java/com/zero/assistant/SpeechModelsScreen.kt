@@ -35,29 +35,43 @@ import com.zero.assistant.core.OfflineTtsVoice
 import com.zero.assistant.core.VoiceLibraryCategory
 import com.zero.assistant.data.SpeechModelManager
 import com.zero.assistant.core.SpeechModelSpec
+import com.zero.assistant.core.VoiceModelCatalog
+import com.zero.assistant.core.VoiceModelTransferState
+import com.zero.assistant.data.ModelDownloadManager
 
 @Composable
 internal fun SpeechModelsScreen(
     modifier: Modifier,
     manager: SpeechModelManager,
+    voiceModelManager: ModelDownloadManager,
+    refreshTtsVoices: () -> Unit,
+    prepareForVoiceModelRemoval: (() -> Unit) -> Unit,
+    onModelRemoved: () -> Unit,
     ttsVoices: List<OfflineTtsVoice>,
     selectedTtsVoiceId: String?,
     onSelectTtsVoice: (String) -> Boolean,
+    onPreviewTtsVoice: (String) -> Unit,
     onInstallTtsVoices: () -> String,
 ) {
     val states by manager.states.collectAsState()
     val activeModelId by manager.activeModelId.collectAsState()
+    val voiceModelState by voiceModelManager.state.collectAsState()
+    val activeVoiceModelId by voiceModelManager.activeModelId.collectAsState()
     var selectedCategory by remember { mutableStateOf(VoiceLibraryCategory.Simple) }
     var confirmDownload by remember { mutableStateOf<SpeechModelSpec?>(null) }
+    var confirmVoiceDownload by remember { mutableStateOf(false) }
+    var confirmVoiceUninstall by remember { mutableStateOf(false) }
     var confirmUninstall by remember { mutableStateOf<SpeechModelSpec?>(null) }
     var feedback by remember { mutableStateOf<String?>(null) }
 
     Column(modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Text("Voice Library", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
         Text(
-            "Installed offline speech voices and local recognition models.",
+            "Vosk speech recognition, Android offline voices, and downloadable Kokoro TTS.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            maxLines = 1,
+            softWrap = false,
         )
         TabRow(selectedTabIndex = VoiceLibraryCategory.entries.indexOf(selectedCategory)) {
             VoiceLibraryCategory.entries.forEach { category ->
@@ -90,6 +104,7 @@ internal fun SpeechModelsScreen(
                         TtsVoiceRow(
                             voice = voice,
                             selected = selectedTtsVoiceId == voice.id,
+                            onPreview = { onPreviewTtsVoice(voice.id) },
                             onSelect = {
                                 feedback = if (onSelectTtsVoice(voice.id)) "Selected ${voice.displayName}." else "Android could not select that voice."
                             },
@@ -99,15 +114,49 @@ internal fun SpeechModelsScreen(
                 VoiceLibraryCategory.EmotionBased -> {
                     item { Text("Emotion-Based voices", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
                     item {
-                        Text(
-                            "No installed offline speech engine or model reports native emotion controls. ZERO does not present basic pitch, speed, or pause adjustments as model-supported emotions.",
-                            style = MaterialTheme.typography.bodyMedium,
+                        KokoroModelCard(
+                            state = voiceModelState,
+                            active = activeVoiceModelId == VoiceModelCatalog.KOKORO_ID,
+                            manager = voiceModelManager,
+                            onDownload = { confirmVoiceDownload = true },
+                            onActivate = {
+                                feedback = if (voiceModelManager.activate()) {
+                                    refreshTtsVoices()
+                                    "Kokoro is active."
+                                }
+                                else "Kokoro could not be activated."
+                            },
+                            onResume = {
+                                if (!voiceModelManager.resume()) feedback = "Kokoro download could not resume."
+                            },
+                            onSelectVoice = { voiceId ->
+                                feedback = if (onSelectTtsVoice(voiceId)) "Selected $voiceId." else "This Kokoro voice is not ready."
+                            },
+                            onPreviewVoice = { onPreviewTtsVoice("kokoro:af_nova") },
+                            fallbackVoiceInstalled = ttsVoices.any { it.languageTag.startsWith("en", ignoreCase = true) },
+                            onPreviewFallback = {
+                                ttsVoices.firstOrNull { it.languageTag.startsWith("en", ignoreCase = true) }
+                                    ?.let { onPreviewTtsVoice(it.id) }
+                            },
+                            onUninstall = {
+                                confirmVoiceUninstall = true
+                            },
                         )
                     }
                 }
             }
             item { Text("Speech recognition models", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
             item { Text("These STT models recognize speech; they are not text-to-speech voices.", style = MaterialTheme.typography.bodySmall) }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Wake detection · Included", fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                        Text("Sherpa KWS · English built-ins · Apache-2.0", maxLines = 1, softWrap = false)
+                        Text("Silero VAD v4 · 16 kHz · MIT", maxLines = 1, softWrap = false)
+                        Text("KWS assets 5.48 MB · VAD 1.81 MB · custom/Hindi use Vosk", style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
+                    }
+                }
+            }
             items(manager.catalog.models, key = { "model:${it.id}" }) { spec ->
                 val state = states[spec.id] ?: ModelTransferState.Idle
                 ModelRow(
@@ -145,6 +194,53 @@ internal fun SpeechModelsScreen(
         )
     }
 
+    if (confirmVoiceDownload) {
+        AlertDialog(
+            onDismissRequest = { confirmVoiceDownload = false },
+            title = { Text("Download Kokoro INT8?") },
+            text = {
+                Text(
+                    "Downloads a 132.4 MB verified Sherpa-ONNX archive (Apache-2.0) for English and Chinese speech. " +
+                        "It does not include Hindi/Hinglish or Aria/Kavya personas. Allow about 900 MiB of free space for safe installation.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmVoiceDownload = false
+                    feedback = if (voiceModelManager.download()) null else "Kokoro download could not start."
+                }) { Text("Download") }
+            },
+            dismissButton = { TextButton(onClick = { confirmVoiceDownload = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (confirmVoiceUninstall) {
+        AlertDialog(
+            onDismissRequest = { confirmVoiceUninstall = false },
+            title = { Text("Remove Kokoro?") },
+            text = { Text("ZERO will stop Kokoro playback, switch to Android's offline voice engine, then remove the downloaded model files.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmVoiceUninstall = false
+                    prepareForVoiceModelRemoval {
+                        if (!voiceModelManager.uninstall { removed ->
+                                if (removed) {
+                                    onModelRemoved()
+                                    feedback = "Kokoro removed. Android offline TTS is now the fallback."
+                                } else {
+                                    feedback = "Kokoro could not be removed."
+                                }
+                            }
+                        ) {
+                            feedback = "Kokoro removal could not start."
+                        }
+                    }
+                }) { Text("Switch and remove") }
+            },
+            dismissButton = { TextButton(onClick = { confirmVoiceUninstall = false }) { Text("Keep model") } },
+        )
+    }
+
     confirmUninstall?.let { spec ->
         AlertDialog(
             onDismissRequest = { confirmUninstall = null },
@@ -170,14 +266,109 @@ internal fun SpeechModelsScreen(
 }
 
 @Composable
-private fun TtsVoiceRow(voice: OfflineTtsVoice, selected: Boolean, onSelect: () -> Unit) {
+private fun KokoroModelCard(
+    state: VoiceModelTransferState,
+    active: Boolean,
+    manager: ModelDownloadManager,
+    onDownload: () -> Unit,
+    onActivate: () -> Unit,
+    onResume: () -> Unit,
+    onSelectVoice: (String) -> Unit,
+    onPreviewVoice: () -> Unit,
+    fallbackVoiceInstalled: Boolean,
+    onPreviewFallback: () -> Unit,
+    onUninstall: () -> Unit,
+) {
+    val model = VoiceModelCatalog.models.first()
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(model.name, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+            Text(model.summary, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+            Text(
+                "${model.language} · ${formatMegabytes(model.archiveSizeBytes)} MB · ${model.license}",
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                softWrap = false,
+            )
+            Text("Sherpa-ONNX · 53 speakers · Source: k2-fsa/sherpa-onnx", style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
+            Text("Before download, preview uses an installed Android system voice.", style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
+            OutlinedButton(onClick = onPreviewFallback, enabled = fallbackVoiceInstalled) {
+                Text(if (fallbackVoiceInstalled) "Preview system fallback" else "No system preview voice", maxLines = 1, softWrap = false)
+            }
+            when (state) {
+                VoiceModelTransferState.Idle -> Text("Not installed")
+                is VoiceModelTransferState.Downloading -> {
+                    val progress = if (state.totalBytes > 0) state.receivedBytes.toFloat() / state.totalBytes else 0f
+                    LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "${(progress * 100).toInt()}% · ${formatMegabytes(state.receivedBytes)} / ${formatMegabytes(state.totalBytes)} MB",
+                        maxLines = 1,
+                        softWrap = false,
+                    )
+                }
+                VoiceModelTransferState.Paused -> Text("Download paused")
+                VoiceModelTransferState.Installing -> Text("Verifying and installing")
+                VoiceModelTransferState.Removing -> Text("Switching engine and removing files")
+                VoiceModelTransferState.Installed -> Text(if (active) "Installed · Active" else "Installed")
+                is VoiceModelTransferState.Failed -> Text("Install failed: ${state.message}", maxLines = 2)
+                is VoiceModelTransferState.RemoveFailed -> Text(state.message, maxLines = 2)
+                VoiceModelTransferState.Cancelled -> Text("Download cancelled")
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (state) {
+                    is VoiceModelTransferState.Downloading -> {
+                        OutlinedButton(onClick = manager::pause) { Text("Pause", maxLines = 1, softWrap = false) }
+                        OutlinedButton(onClick = manager::cancel) { Text("Cancel", maxLines = 1, softWrap = false) }
+                    }
+                    VoiceModelTransferState.Paused -> {
+                        Button(onClick = onResume) { Text("Resume", maxLines = 1, softWrap = false) }
+                        OutlinedButton(onClick = manager::cancel) { Text("Cancel", maxLines = 1, softWrap = false) }
+                    }
+                    VoiceModelTransferState.Installing, VoiceModelTransferState.Removing -> Unit
+                    VoiceModelTransferState.Installed -> {
+                        if (!active) Button(onClick = onActivate) { Text("Activate", maxLines = 1, softWrap = false) }
+                        if (active) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                listOf("Bella", "Nova", "Heart").forEach { voice ->
+                                    OutlinedButton(
+                                        onClick = { onSelectVoice("kokoro:af_${voice.lowercase()}") },
+                                        modifier = Modifier.weight(1f),
+                                    ) { Text(voice, maxLines = 1, softWrap = false) }
+                                }
+                            }
+                            OutlinedButton(onClick = onPreviewVoice) { Text("Preview Nova", maxLines = 1, softWrap = false) }
+                        }
+                        OutlinedButton(onClick = onUninstall) { Text("Remove", maxLines = 1, softWrap = false) }
+                    }
+                    is VoiceModelTransferState.Failed, VoiceModelTransferState.Cancelled ->
+                        Button(onClick = onDownload) { Text("Retry", maxLines = 1, softWrap = false) }
+                    is VoiceModelTransferState.RemoveFailed ->
+                        Button(onClick = onUninstall) { Text("Retry removal", maxLines = 1, softWrap = false) }
+                    VoiceModelTransferState.Idle ->
+                        Button(onClick = onDownload) { Text("Download", maxLines = 1, softWrap = false) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TtsVoiceRow(
+    voice: OfflineTtsVoice,
+    selected: Boolean,
+    onPreview: () -> Unit,
+    onSelect: () -> Unit,
+) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(voice.languageLabel, fontWeight = FontWeight.SemiBold)
-            Text("${voice.displayName} · ${voice.languageTag} · offline", style = MaterialTheme.typography.bodySmall)
-            Text("Quality ${voice.quality} · installed", style = MaterialTheme.typography.labelSmall)
-            if (selected) Text("Selected", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
-            else OutlinedButton(onClick = onSelect) { Text("Select voice") }
+            Text(voice.languageLabel, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+            Text("${voice.displayName} · ${voice.languageTag} · offline", style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
+            Text("Quality ${voice.quality} · installed", style = MaterialTheme.typography.labelSmall, maxLines = 1, softWrap = false)
+            if (selected) Text("Selected", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onPreview) { Text("Preview", maxLines = 1, softWrap = false) }
+                if (!selected) OutlinedButton(onClick = onSelect) { Text("Select voice", maxLines = 1, softWrap = false) }
+            }
         }
     }
 }
@@ -196,29 +387,29 @@ private fun ModelRow(
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(spec.name, fontWeight = FontWeight.SemiBold)
-                Text(if (spec.bundledAsset != null) "Included" else "Downloadable", style = MaterialTheme.typography.labelMedium)
+                Text(spec.name, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false)
+                Text(if (spec.bundledAsset != null) "Included" else "Downloadable", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
             }
-            Text("${spec.languageName} · v${spec.version} · ${formatMegabytes(spec.archiveSizeBytes)} MB download")
-            Text("${spec.license} · Source: alphacephei.com/vosk/models", style = MaterialTheme.typography.bodySmall)
-            Text(modelStateLabel(state, isActive), style = MaterialTheme.typography.bodySmall)
+            Text("${spec.languageName} · v${spec.version} · ${formatMegabytes(spec.archiveSizeBytes)} MB download", maxLines = 1, softWrap = false)
+            Text("${spec.license} · Source: alphacephei.com/vosk/models", style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
+            Text(modelStateLabel(state, isActive), style = MaterialTheme.typography.bodySmall, maxLines = 1, softWrap = false)
             if (state is ModelTransferState.Downloading) {
                 val progress = if (state.totalBytes > 0) state.receivedBytes.toFloat() / state.totalBytes else 0f
                 LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                Text("${formatMegabytes(state.receivedBytes)} / ${formatMegabytes(state.totalBytes)} MB")
+                Text("${formatMegabytes(state.receivedBytes)} / ${formatMegabytes(state.totalBytes)} MB", maxLines = 1, softWrap = false)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 when (state) {
-                    is ModelTransferState.Downloading -> OutlinedButton(onClick = onCancel) { Text("Cancel") }
-                    ModelTransferState.Installing -> Text("Validating and installing…", style = MaterialTheme.typography.labelMedium)
+                    is ModelTransferState.Downloading -> OutlinedButton(onClick = onCancel) { Text("Cancel", maxLines = 1, softWrap = false) }
+                    ModelTransferState.Installing -> Text("Validating and installing…", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
                     ModelTransferState.Installed -> {
-                        if (!isActive) Button(onClick = onSelect) { Text("Select") }
-                        if (spec.bundledAsset == null) OutlinedButton(onClick = onUninstall) { Text("Uninstall") }
+                        if (!isActive) Button(onClick = onSelect) { Text("Select", maxLines = 1, softWrap = false) }
+                        if (spec.bundledAsset == null) OutlinedButton(onClick = onUninstall) { Text("Uninstall", maxLines = 1, softWrap = false) }
                     }
-                    is ModelTransferState.Failed, ModelTransferState.Cancelled -> Button(onClick = onRetry) { Text("Retry") }
+                    is ModelTransferState.Failed, ModelTransferState.Cancelled -> Button(onClick = onRetry) { Text("Retry", maxLines = 1, softWrap = false) }
                     ModelTransferState.Idle -> {
-                        if (spec.bundledAsset == null) Button(onClick = onDownload) { Text("Download & install") }
-                        else Text("Included model installs on first launch", style = MaterialTheme.typography.labelMedium)
+                        if (spec.bundledAsset == null) Button(onClick = onDownload) { Text("Download & install", maxLines = 1, softWrap = false) }
+                        else Text("Included model installs on first launch", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
                     }
                 }
             }

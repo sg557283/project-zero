@@ -78,6 +78,21 @@ class CommandParserTest {
             AssistantCommand.DraftWhatsAppMessage("Mamma", "I’m coming home early."),
             CommandParser.parse("Open WhatsApp and text Mamma: I’m coming home early."),
         )
+        assertEquals(
+            AssistantCommand.DraftWhatsAppMessage("Mamma", "Main ghar aa rahi hoon"),
+            CommandParser.parse("WhatsApp par Mamma ko message bhejo: Main ghar aa rahi hoon"),
+        )
+    }
+
+    @Test fun parsesAdditionalBilingualLocalCommands() {
+        assertEquals(AssistantCommand.OpenApp(AppTarget.Music), CommandParser.parse("Spotify par gaana bajao"))
+        assertEquals(AssistantCommand.DraftCallContact("Mamma"), CommandParser.parse("Call Mamma"))
+        assertEquals(AssistantCommand.DraftCallContact("Mamma"), CommandParser.parse("Mamma ko call lagao"))
+        assertEquals(AssistantCommand.AdjustVolume(true), CommandParser.parse("Volume badhao"))
+        assertEquals(AssistantCommand.AdjustVolume(false), CommandParser.parse("आवाज़ कम करो"))
+        assertEquals(AssistantCommand.DraftReminder("kal subah 7 baje"), CommandParser.parse("kal subah 7 baje yaad dilana"))
+        assertEquals(AssistantCommand.SaveNote("buy milk"), CommandParser.parse("buy milk note save karo"))
+        assertEquals(AssistantCommand.SaveNote("buy milk"), CommandParser.parse("note save karo buy milk"))
     }
 
     @Test fun parsesHelpAndUnsupportedInput() {

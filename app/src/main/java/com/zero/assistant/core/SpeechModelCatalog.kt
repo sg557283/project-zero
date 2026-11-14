@@ -42,7 +42,7 @@ object SpeechModelCatalogParser {
 
     private fun validateModel(model: SpeechModelSpec) {
         require(modelIdPattern.matches(model.id) && ".." !in model.id && !model.id.endsWith('.')) { "Invalid model ID" }
-        require(model.language in setOf("hi-IN", "en-US")) { "Unsupported model language" }
+        require(model.language in setOf("hi-IN", "en-US", "en-IN")) { "Unsupported model language" }
         require(model.languageName.isNotBlank() && model.name.isNotBlank() && model.version.isNotBlank()) {
             "Model metadata is incomplete"
         }

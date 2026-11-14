@@ -4,9 +4,11 @@ sealed interface AssistantCommand {
     data object Identity : AssistantCommand
     data class OpenApp(val app: AppTarget) : AssistantCommand
     data class SetFlashlight(val enabled: Boolean) : AssistantCommand
+    data class AdjustVolume(val increase: Boolean) : AssistantCommand
     data object ToggleFlashlight : AssistantCommand
     data class OpenSystemSettings(val target: String) : AssistantCommand
     data class CallNumber(val number: String) : AssistantCommand
+    data class DraftCallContact(val contact: String) : AssistantCommand
     data class SearchYouTube(val query: String) : AssistantCommand
     data class DraftWhatsAppMessage(val contact: String, val message: String) : AssistantCommand
     data class SaveNote(val text: String) : AssistantCommand
@@ -43,9 +45,28 @@ object AssistantIdentity {
 object CommandParser {
     private val callPattern = Regex("^\\s*(?:call|dial|phone|कॉल)\\s+(\\+?[\\d\\s().-]{7,24})\\s*$", RegexOption.IGNORE_CASE)
     private val youtubeSearchPattern = Regex("^\\s*(?:open\\s+)?youtube\\s+and\\s+search\\s+for\\s+(.{1,160})\\s*$", RegexOption.IGNORE_CASE)
-    private val whatsappMessagePattern = Regex("^\\s*(?:open\\s+)?whatsapp\\s+and\\s+(?:text|message)\\s+([^:]{1,80}):\\s*(.{1,1000})\\s*$", RegexOption.IGNORE_CASE)
+    private val whatsappMessagePattern = Regex(
+        "^\\s*(?:open\\s+)?whatsapp\\s+(?:and\\s+)?(?:text|message)\\s+([^:]{1,80}):\\s*(.{1,1000})\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
+    private val hinglishWhatsAppPattern = Regex(
+        "^\\s*whatsapp\\s+par\\s+(.{1,80}?)\\s+ko\\s+message\\s+bhejo\\s*:\\s*(.{1,1000})\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
     private val reminderPattern = Regex("^\\s*(?:remind me to|remind me|याद दिलाना)\\s+(.{1,160})$", RegexOption.IGNORE_CASE)
-    private val notePattern = Regex("^\\s*(?:note|save note|write note|नोट)\\s+(.{1,2000})$", RegexOption.IGNORE_CASE)
+    private val hinglishReminderPattern = Regex("^\\s*(.{1,160})\\s+yaad\\s+dilana\\s*$", RegexOption.IGNORE_CASE)
+    private val notePattern = Regex(
+        "^\\s*(?:note\\s+save\\s+karo\\s+(.{1,2000})|(?:note|save note|write note|नोट)\\s+(.{1,2000})|(.{1,2000})\\s+note\\s+save\\s+karo)\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
+    private val namedCallPattern = Regex(
+        "^\\s*(?:call|phone)\\s+([\\p{L}\\p{M}][\\p{L}\\p{M}\\s.'-]{0,78})\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
+    private val hinglishNamedCallPattern = Regex(
+        "^\\s*([\\p{L}\\p{M}][\\p{L}\\p{M}\\s.'-]{0,78}?)\\s+ko\\s+call\\s+(?:lagao|karo)\\s*$",
+        RegexOption.IGNORE_CASE,
+    )
     private val timePhrases = listOf("time", "kitne baje", "samay", "waqt", "कितने बजे", "समय क्या")
     private val batteryPhrases = listOf("battery", "charge", "बैटरी", "चार्ज")
     private val helpPhrases = listOf("help", "what can you do", "commands", "madad", "मदद", "सहायता")
@@ -68,14 +89,28 @@ object CommandParser {
             val message = groups[2].trim()
             if (contact.isNotBlank() && message.isNotBlank()) return AssistantCommand.DraftWhatsAppMessage(contact, message)
         }
+        hinglishWhatsAppPattern.matchEntire(input)?.groupValues?.let { groups ->
+            val contact = groups[1].trim()
+            val message = groups[2].trim()
+            if (contact.isNotBlank() && message.isNotBlank()) return AssistantCommand.DraftWhatsAppMessage(contact, message)
+        }
         callPattern.matchEntire(input)?.groupValues?.get(1)?.let { rawNumber ->
             val number = rawNumber.filter { it.isDigit() || it == '+' }
             if (number.count(Char::isDigit) in 7..15) return AssistantCommand.CallNumber(number)
         }
+        namedCallPattern.matchEntire(input)?.groupValues?.get(1)?.trim()?.let { contact ->
+            if (contact.isNotBlank()) return AssistantCommand.DraftCallContact(contact)
+        }
+        hinglishNamedCallPattern.matchEntire(input)?.groupValues?.get(1)?.trim()?.let { contact ->
+            if (contact.isNotBlank()) return AssistantCommand.DraftCallContact(contact)
+        }
         reminderPattern.matchEntire(input)?.groupValues?.get(1)?.trim()?.let { title ->
             if (title.isNotBlank()) return AssistantCommand.DraftReminder(title)
         }
-        notePattern.matchEntire(input)?.groupValues?.get(1)?.trim()?.let { text ->
+        hinglishReminderPattern.matchEntire(input)?.groupValues?.get(1)?.trim()?.let { title ->
+            if (title.isNotBlank()) return AssistantCommand.DraftReminder(title)
+        }
+        notePattern.matchEntire(input)?.groupValues?.drop(1)?.firstOrNull { it.isNotBlank() }?.trim()?.let { text ->
             if (text.isNotBlank()) return AssistantCommand.SaveNote(text)
         }
         val text = input.trim().lowercase().replace(Regex("[^\\p{L}\\p{M}\\p{N}\\s]"), " ")
@@ -90,6 +125,12 @@ object CommandParser {
         if (text in setOf("battery saver", "power saver", "बैटरी सेवर्स", "बैटरी सेविंग")) return AssistantCommand.OpenSystemSettings("battery_saver")
         if (timePhrases.any(text::contains)) return AssistantCommand.TellTime
         if (batteryPhrases.any(text::contains)) return AssistantCommand.BatteryStatus
+        if (listOf("volume up", "volume increase", "turn volume up", "volume badhao", "awaz badhao", "आवाज़ बढ़ाओ", "वॉल्यूम बढ़ाओ").any(text::contains)) {
+            return AssistantCommand.AdjustVolume(increase = true)
+        }
+        if (listOf("volume down", "volume decrease", "turn volume down", "volume kam karo", "awaz kam karo", "आवाज़ कम करो", "वॉल्यूम कम करो").any(text::contains)) {
+            return AssistantCommand.AdjustVolume(increase = false)
+        }
         if (listOf("show reminders", "reminders", "show tasks", "today's tasks", "today s tasks", "planner", "योजनाएं", "याद दिलाने").any(text::contains)) return AssistantCommand.ShowPlanner
         if (listOf("show notes", "my notes", "notes", "नोट दिखाओ").any(text::contains)) return AssistantCommand.ShowNotes
         val shortcutName = Regex("^(?:run|shortcut)\\s+(.+)$").matchEntire(text)?.groupValues?.get(1)?.trim()
@@ -105,6 +146,7 @@ object CommandParser {
         }
 
         val app = when {
+            listOf("spotify").any(text::contains) -> AppTarget.Music
             listOf("youtube", "you tube", "यूट्यूब").any(text::contains) -> AppTarget.YouTube
             listOf("whatsapp", "whats app", "व्हाट्सएप", "व्हाट्सऐप").any(text::contains) -> AppTarget.WhatsApp
             listOf("music", "gaana", "संगीत", "गाना").any(text::contains) -> AppTarget.Music
@@ -121,7 +163,7 @@ object CommandParser {
             else -> null
         }
         if (app != null && (
-            listOf("open", "launch", "kholo", "khol", "chalao", "start", "खोलो", "खोल").any(text::contains) ||
+            listOf("open", "launch", "kholo", "khol", "chalao", "bajao", "par", "start", "खोलो", "खोल").any(text::contains) ||
             text in setOf("youtube", "you tube", "यूट्यूब", "whatsapp", "whats app", "व्हाट्सएप", "व्हाट्सऐप", "music", "gaana", "संगीत", "गाना", "maps", "map", "browser", "chrome", "phone", "dialer", "messages", "sms", "calculator", "calc", "camera", "camra", "कैमरा", "scanner", "scan", "settings", "सेटिंग्स", "vault", "zero vault", "notes", "note", "नोट")
         )) {
             return AssistantCommand.OpenApp(app)

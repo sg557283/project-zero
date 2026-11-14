@@ -16,6 +16,7 @@
 
     <queries>
         <package android:name="com.google.android.youtube" />
+        <package android:name="com.spotify.music" />
         <package android:name="com.whatsapp" />
         <intent>
             <action android:name="android.intent.action.MAIN" />

@@ -19,6 +19,7 @@ class SpeechOutputControllerTest {
         var shutDown = false
         var selectedVoiceId: String? = null
         var speechCompleteListener: (() -> Unit)? = null
+        var speechErrorListener: ((String) -> Unit)? = null
 
         override fun initialize(onInitialized: (Boolean) -> Unit) {
             initializationCallback = onInitialized
@@ -39,6 +40,10 @@ class SpeechOutputControllerTest {
 
         override fun setOnSpeechComplete(listener: () -> Unit) {
             speechCompleteListener = listener
+        }
+
+        override fun setOnSpeechError(listener: (String) -> Unit) {
+            speechErrorListener = listener
         }
 
         override fun speak(text: String): Boolean {
@@ -181,5 +186,35 @@ class SpeechOutputControllerTest {
         assertEquals(voice.id, engine.selectedVoiceId)
         assertEquals(SpeechOutputStatus.ReadyWithVoice(voice), controller.status)
         assertEquals(listOf("Hello"), engine.spoken)
+    }
+
+    @Test
+    fun routesEachUtteranceToItsDetectedOfflineLanguage() {
+        val engine = FakeEngine()
+        val controller = SpeechOutputController(engine) {}
+        controller.initialize()
+        engine.finishInitialization()
+
+        controller.speak("YouTube kholo")
+        controller.speak("Open YouTube")
+
+        assertEquals(listOf("hi-IN", "en-US"), engine.selectedLanguages.takeLast(2))
+        assertEquals(listOf("YouTube kholo", "Open YouTube"), engine.spoken)
+    }
+
+    @Test
+    fun reportsAsynchronousSynthesisErrorsAndDropsQueuedSpeech() {
+        val engine = FakeEngine(completesSpeechImmediately = false)
+        val controller = SpeechOutputController(engine) {}
+        controller.initialize()
+        engine.finishInitialization()
+
+        controller.speak("First")
+        controller.speak("Must be dropped")
+        engine.speechErrorListener?.invoke("Kokoro failed")
+        assertEquals(SpeechOutputStatus.SpeakFailed, controller.status)
+        controller.speak("Recovered")
+
+        assertEquals(listOf("First", "Recovered"), engine.spoken)
     }
 }

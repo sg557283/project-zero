@@ -37,6 +37,8 @@ interface SpeechOutputEngine {
     fun availableOfflineVoices(): List<OfflineTtsVoice> = emptyList()
     fun selectVoice(voiceId: String): Boolean = false
     fun setOnSpeechComplete(listener: () -> Unit) = Unit
+    fun setOnSpeechError(listener: (String) -> Unit) = Unit
+    fun prepareForVoiceModelRemoval(onReady: () -> Unit) = onReady()
     fun speak(text: String): Boolean
     fun stop()
     fun shutdown()
@@ -50,6 +52,7 @@ class SpeechOutputController(
     private var initialized = false
     private var closed = false
     private var language = SpeechLanguage.English
+    private var selectedVoice: OfflineTtsVoice? = null
     private var readyStatus: SpeechOutputStatus = SpeechOutputStatus.Ready(language)
 
     var status: SpeechOutputStatus = SpeechOutputStatus.Initializing
@@ -63,12 +66,19 @@ class SpeechOutputController(
                     speakNextPending()
                 }
             }
+            engine.setOnSpeechError {
+                if (!closed) {
+                    pending.clear()
+                    updateStatus(SpeechOutputStatus.SpeakFailed)
+                }
+            }
             engine.initialize(::onInitialized)
         }
     }
 
     fun setLanguage(language: SpeechLanguage) {
         this.language = language
+        selectedVoice = null
         if (initialized && !closed) configureLanguage()
     }
 
@@ -78,6 +88,7 @@ class SpeechOutputController(
         if (!initialized || closed) return false
         val voice = engine.availableOfflineVoices().firstOrNull { it.id == voiceId } ?: return false
         if (!engine.selectVoice(voiceId)) return false
+        selectedVoice = voice
         readyStatus = SpeechOutputStatus.ReadyWithVoice(voice)
         updateStatus(readyStatus)
         return true
@@ -112,6 +123,25 @@ class SpeechOutputController(
         if (!closed) {
             engine.stop()
             if (status == SpeechOutputStatus.Speaking) updateStatus(readyStatus)
+        }
+    }
+
+    fun prepareForVoiceModelRemoval(onReady: () -> Unit) {
+        pending.clear()
+        if (closed) {
+            onReady()
+            return
+        }
+        engine.stop()
+        selectedVoice = null
+        if (initialized && engine.selectOfflineVoice(language.tag)) {
+            readyStatus = SpeechOutputStatus.Ready(language)
+        } else if (initialized) {
+            readyStatus = SpeechOutputStatus.LanguageUnavailable(language)
+        }
+        engine.prepareForVoiceModelRemoval {
+            if (!closed) updateStatus(readyStatus)
+            onReady()
         }
     }
 
@@ -157,6 +187,16 @@ class SpeechOutputController(
 
     private fun speakWhenReady(text: String) {
         if (status !is SpeechOutputStatus.Ready && status !is SpeechOutputStatus.ReadyWithVoice) return
+        val targetLanguage = ConversationalVoiceEngine.languageFor(text)
+        val selected = selectedVoice
+        val restoredSelection = selected != null &&
+            selected.languageTag.startsWith(targetLanguage.tag.substringBefore('-'), ignoreCase = true) &&
+            engine.selectVoice(selected.id)
+        if (restoredSelection) {
+            readyStatus = SpeechOutputStatus.ReadyWithVoice(requireNotNull(selected))
+        } else if (engine.selectOfflineVoice(targetLanguage.tag)) {
+            readyStatus = SpeechOutputStatus.Ready(targetLanguage)
+        }
         updateStatus(SpeechOutputStatus.Speaking)
         if (!engine.speak(text)) {
             pending.clear()

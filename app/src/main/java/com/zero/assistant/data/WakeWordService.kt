@@ -21,6 +21,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -29,14 +30,13 @@ import com.zero.assistant.R
 import com.zero.assistant.core.AssistantCommand
 import com.zero.assistant.core.CommandParser
 import com.zero.assistant.core.AssistantIdentity
+import com.zero.assistant.core.OnScreenActionParser
 import com.zero.assistant.core.WakeWord
 import com.zero.assistant.data.TorchController
 import org.json.JSONArray
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -55,7 +55,8 @@ class WakeWordService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var modelManager: SpeechModelManager? = null
     private var recognizer: Recognizer? = null
-    private var speechService: SpeechService? = null
+    private var audioCapture: VoiceAudioCapture? = null
+    private val voiceCaptureEffects = VoiceCaptureEffects()
     private var serviceRunning = false
     private var awaitingCommand = false
     private var commandCapture = false
@@ -77,7 +78,14 @@ class WakeWordService : Service() {
     private var speechContinuation: (() -> Unit)? = null
     private val phraseChangedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (serviceRunning && !awaitingCommand && !commandCapture && activeModel != null) {
+            if (intent?.action == WakeWordSettings.ACTION_SPEECH_MODEL_CHANGED) {
+                reloadActiveModel()
+                return
+            }
+            if (serviceRunning && !awaitingCommand && !commandCapture && activeModel != null &&
+                (intent?.action == WakeWordSettings.ACTION_PHRASES_CHANGED ||
+                    intent?.action == WakeWordSettings.ACTION_WAKE_SENSITIVITY_CHANGED)
+            ) {
                 startCapture(commandMode = false)
             }
         }
@@ -89,6 +97,9 @@ class WakeWordService : Service() {
             handler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
         }
     }
+    private val commandCaptureTimeout = Runnable {
+        if (captureActive && commandCapture) handleCommandTimeout()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -97,7 +108,11 @@ class WakeWordService : Service() {
         ContextCompat.registerReceiver(
             this,
             phraseChangedReceiver,
-            IntentFilter(WakeWordSettings.ACTION_PHRASES_CHANGED),
+            IntentFilter().apply {
+                addAction(WakeWordSettings.ACTION_PHRASES_CHANGED)
+                addAction(WakeWordSettings.ACTION_SPEECH_MODEL_CHANGED)
+                addAction(WakeWordSettings.ACTION_WAKE_SENSITIVITY_CHANGED)
+            },
             ContextCompat.RECEIVER_NOT_EXPORTED,
         )
     }
@@ -130,7 +145,7 @@ class WakeWordService : Service() {
         serviceRunning = true
         acquireCpuWakeLock()
         startForegroundCompat(buildNotification("Wake listening is active. Microphone access is in use."))
-        if (activeModel != null && speechService == null && !awaitingCommand) {
+        if (activeModel != null && audioCapture == null && !awaitingCommand) {
             startCapture(commandMode = false)
             return START_STICKY
         }
@@ -175,6 +190,23 @@ class WakeWordService : Service() {
         }
     }
 
+    private fun reloadActiveModel() {
+        if (!serviceRunning || awaitingCommand || commandCapture) return
+        val manager = modelManager ?: return
+        stopCapture()
+        recognizer?.close()
+        recognizer = null
+        activeModel = null
+        activeModelId = null
+        manager.loadActiveModel { result ->
+            if (!serviceRunning || !WakeWordSettings.enabled(this)) return@loadActiveModel
+            result.fold(
+                onSuccess = { startRecognizer(it, manager.currentActiveModelId() ?: return@fold) },
+                onFailure = { markEngineUnavailable("Selected speech model could not be loaded: ${it.message ?: "model unavailable"}") },
+            )
+        }
+    }
+
     private fun startCapture(commandMode: Boolean): Boolean {
         if (!serviceRunning || !WakeWordSettings.enabled(this)) return false
         val model = activeModel ?: return false
@@ -195,55 +227,82 @@ class WakeWordService : Service() {
             recognizer = currentRecognizer
             commandCapture = commandMode
             commandHandled = false
-            val service = SpeechService(currentRecognizer, SAMPLE_RATE_HZ)
-            speechService = service
-            val listener = object : RecognitionListener {
-                override fun onPartialResult(hypothesis: String?) = Unit
-                override fun onResult(hypothesis: String?) = handleHypothesis(hypothesis)
-                override fun onFinalResult(hypothesis: String?) = handleHypothesis(hypothesis)
-                override fun onError(exception: Exception?) {
-                    if (!captureActive) return
-                    WakeWordSettings.setActive(this@WakeWordService, false, exception?.message ?: "Microphone audio stopped unexpectedly.")
-                    releaseCpuWakeLock()
-                    updateNotification("Microphone error: ${exception?.message ?: "audio input unavailable"}")
-                    if (commandCapture) handleCommandTimeout() else scheduleRestart()
-                }
-                override fun onTimeout() {
-                    if (!captureActive) return
-                    if (commandCapture) handleCommandTimeout() else scheduleRestart()
-                }
-            }
+            val sensitivity = WakeWordSettings.sensitivity(this)
+            val capture = VoiceAudioCapture(
+                context = this,
+                recognizer = currentRecognizer,
+                sensitivity = sensitivity,
+                enableKeywordSpotter = !commandMode,
+                onRecognition = { hypothesis -> handler.post { handleHypothesis(hypothesis) } },
+                onKeyword = { keyword -> handler.post { handleWakeKeyword(keyword) } },
+                onFailure = { failure -> handler.post { handleCaptureFailure(failure) } },
+            )
+            audioCapture = capture
+            voiceCaptureEffects.attach(
+                capture.audioSessionId,
+                enabled = true,
+            )
             captureActive = true
-            val started = if (commandMode) {
-                service.startListening(listener, COMMAND_CAPTURE_TIMEOUT_MS)
-            } else {
-                service.startListening(listener)
+            capture.start()
+            if (commandMode) handler.postDelayed(commandCaptureTimeout, COMMAND_CAPTURE_TIMEOUT_MS.toLong())
+            val initializationWarning = capture.initializationWarnings.joinToString(". ")
+            if (initializationWarning.isNotBlank()) {
+                Log.w(TAG, initializationWarning)
             }
-            if (!started) {
-                stopCapture()
-                if (!commandMode) markEngineUnavailable("Vosk could not start microphone capture.")
-                false
+            if (commandMode) {
+                updateNotification(
+                    if (initializationWarning.isBlank()) "Yes boss. Say your command now."
+                    else "Yes boss. $initializationWarning",
+                )
+                WakeWordSettings.updateAssistantPanel(this, "Listening. Say your command now.")
             } else {
-                if (!commandMode) {
-                    acquireCpuWakeLock()
-                    WakeWordSettings.setActive(this, true)
-                    handler.removeCallbacks(heartbeatRunnable)
-                    handler.postDelayed(heartbeatRunnable, HEARTBEAT_INTERVAL_MS)
-                    val enabledPhrases = WakeWordSettings.phrases(this).filter { it.enabled }
-                    val phraseText = enabledPhrases.joinToString(", ") { it.phrase }
-                    updateNotification("Listening for $phraseText using ${activeModelId ?: "the local model"}.")
-                } else {
-                    updateNotification("Yes boss. Say your command now.")
-                    WakeWordSettings.updateAssistantPanel(this, "Listening. Say your command now.")
-                }
-                true
+                acquireCpuWakeLock()
+                WakeWordSettings.setActive(this, true, initializationWarning.takeIf { it.isNotBlank() })
+                handler.removeCallbacks(heartbeatRunnable)
+                handler.postDelayed(heartbeatRunnable, HEARTBEAT_INTERVAL_MS)
+                val enabledPhrases = WakeWordSettings.phrases(this).filter { it.enabled }
+                val phraseText = enabledPhrases.joinToString(", ") { it.phrase }
+                val engines = buildList {
+                    add(if (capture.hasKeywordSpotter) "Sherpa English KWS" else "Vosk wake fallback")
+                    add(if (capture.hasVad) "Silero VAD" else "Vosk audio gate unavailable")
+                    add(activeModelId ?: "local Vosk")
+                }.joinToString(" + ")
+                updateNotification("Listening for $phraseText using $engines.")
             }
+            true
         } catch (failure: Exception) {
             stopCapture()
             markEngineUnavailable(failure.message ?: "Microphone could not start.")
             updateNotification("Microphone could not start: ${failure.message ?: "audio input unavailable"}")
             false
+        } catch (failure: LinkageError) {
+            stopCapture()
+            markEngineUnavailable("Offline audio runtime could not be loaded.")
+            updateNotification("Offline audio runtime could not be loaded: ${failure.message ?: "native library unavailable"}")
+            false
         }
+    }
+
+    private fun handleWakeKeyword(keyword: String) {
+        if (!serviceRunning || !captureActive || commandCapture || speaking || transitioningFromWake) return
+        val match = WakeWord.match(keyword, WakeWordSettings.phrases(this)) ?: return
+        val now = System.currentTimeMillis()
+        if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
+        lastWakeAt = now
+        WakeWordSettings.recordDetection(this)
+        WakeWordSettings.updateAssistantPanel(this, "Wake phrase recognized. ZERO is getting ready.")
+        beginCommandSession(match.command)
+    }
+
+    private fun handleCaptureFailure(failure: Exception) {
+        if (!captureActive) return
+        val wasCommandCapture = commandCapture
+        val message = "Microphone error: ${failure.message ?: "audio input unavailable"}"
+        stopCapture()
+        WakeWordSettings.setActive(this, false, message)
+        releaseCpuWakeLock()
+        updateNotification(message)
+        if (wasCommandCapture) handleCommandTimeout() else scheduleRestart()
     }
 
     private fun handleHypothesis(hypothesis: String?) {
@@ -256,6 +315,7 @@ class WakeWordService : Service() {
         lastTranscriptAt = now
 
         if (commandCapture) {
+            handler.removeCallbacks(commandCaptureTimeout)
             if (!commandHandled) {
                 commandHandled = true
                 handleCapturedCommand(transcript)
@@ -288,11 +348,50 @@ class WakeWordService : Service() {
         if (!serviceRunning || !awaitingCommand) return
         awaitingCommand = false
         stopCapture()
-        WakeWordSettings.updateAssistantPanel(this, "Thinking about your command…")
+        WakeWordSettings.updateAssistantPanel(
+            this,
+            "Thinking about your command…",
+            faceMode = com.zero.assistant.BotFaceMode.Thinking.name,
+        )
+        if (OnScreenActionParser.parse(text) != null) {
+            if (!getSharedPreferences("zero_accessibility", Context.MODE_PRIVATE)
+                    .getBoolean("assistant_edge_panel", false)
+            ) {
+                requestForegroundReview(text, "Enable Assistant Edge Panel and ZERO Accessibility service for screen actions.")
+                return
+            }
+            val accessibilityManager = getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+            val serviceEnabled = accessibilityManager
+                ?.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .orEmpty()
+                .any {
+                    it.resolveInfo.serviceInfo.packageName == packageName &&
+                        it.resolveInfo.serviceInfo.name == "com.zero.assistant.data.VolumeAccessibilityService"
+                }
+            if (!serviceEnabled) {
+                requestForegroundReview(text, "Enable ZERO in Android Accessibility settings before using screen actions.")
+                return
+            }
+            WakeWordSettings.updateAssistantPanel(
+                this,
+                "Acting on screen…",
+                faceMode = com.zero.assistant.BotFaceMode.ActingOnScreen.name,
+            )
+            WakeWordSettings.requestOnScreenAction(this, text)
+            transitioningFromWake = true
+            speakThen("Done boss.") {
+                transitioningFromWake = false
+                startCapture(commandMode = false)
+            }
+            return
+        }
         when (val command = CommandParser.parse(text)) {
             AssistantCommand.Identity -> respondAndResume(AssistantIdentity.RESPONSE)
             AssistantCommand.TellTime -> respondAndResume("It is ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}.")
             AssistantCommand.BatteryStatus -> respondAndResume(readBatteryStatus())
+            is AssistantCommand.AdjustVolume -> respondAndResume(adjustMediaVolume(command.increase))
+            is AssistantCommand.DraftCallContact ->
+                requestForegroundReview(text, "Open ZERO to review the contact request. ZERO will not call a contact without choosing a number.")
             AssistantCommand.ToggleFlashlight -> {
                 if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                     requestForegroundReview(text, "Camera permission is needed. Tap the ZERO notification to review this command.")
@@ -322,7 +421,12 @@ class WakeWordService : Service() {
 
     private fun respondAndResume(message: String) {
         updateNotification(message)
-        WakeWordSettings.updateAssistantPanel(this, "Done boss. $message", 10_000L)
+        WakeWordSettings.updateAssistantPanel(
+            this,
+            "Done boss. $message",
+            10_000L,
+            faceMode = com.zero.assistant.BotFaceMode.Success.name,
+        )
         transitioningFromWake = true
         speakThen("Done boss. $message") {
             transitioningFromWake = false
@@ -414,11 +518,12 @@ class WakeWordService : Service() {
 
     private fun stopCapture() {
         captureActive = false
+        handler.removeCallbacks(commandCaptureTimeout)
         commandCapture = false
-        val currentService = speechService
-        speechService = null
-        runCatching { currentService?.cancel() }
-        runCatching { currentService?.shutdown() }
+        val currentCapture = audioCapture
+        audioCapture = null
+        currentCapture?.stop()
+        voiceCaptureEffects.release()
         val currentRecognizer = recognizer
         recognizer = null
         runCatching { currentRecognizer?.close() }
@@ -461,6 +566,22 @@ class WakeWordService : Service() {
         onFailure = { it.message ?: "Flashlight state could not be changed." },
     )
 
+    private fun adjustMediaVolume(increase: Boolean): String {
+        val audioManager = getSystemService(android.media.AudioManager::class.java)
+            ?: return "Audio controls are unavailable on this device."
+        val direction = if (increase) android.media.AudioManager.ADJUST_RAISE else android.media.AudioManager.ADJUST_LOWER
+        return try {
+            audioManager.adjustStreamVolume(
+                android.media.AudioManager.STREAM_MUSIC,
+                direction,
+                android.media.AudioManager.FLAG_SHOW_UI,
+            )
+            if (increase) "Media volume increased." else "Media volume decreased."
+        } catch (failure: SecurityException) {
+            "Android denied the media volume change: ${failure.message ?: "permission unavailable"}."
+        }
+    }
+
     private fun setFlashlight(enabled: Boolean): String = TorchController.set(this, enabled).fold(
         onSuccess = { if (it) "Flashlight turned on." else "Flashlight turned off." },
         onFailure = { it.message ?: "Android could not change flashlight state." },
@@ -479,9 +600,6 @@ class WakeWordService : Service() {
         handler.postDelayed({
             restartPending = false
             if (!serviceRunning || !WakeWordSettings.enabled(this)) return@postDelayed
-            runCatching { speechService?.shutdown() }
-            speechService = null
-            runCatching { recognizer?.reset() }
             startCapture(commandMode = false)
         }, RESTART_DELAY_MS)
     }
@@ -573,9 +691,7 @@ class WakeWordService : Service() {
         serviceRunning = false
         handler.removeCallbacksAndMessages(null)
         serviceScope.cancel()
-        runCatching { speechService?.cancel() }
-        runCatching { speechService?.shutdown() }
-        speechService = null
+        stopCapture()
         runCatching { recognizer?.close() }
         recognizer = null
         modelManager?.close()
@@ -596,8 +712,7 @@ class WakeWordService : Service() {
             serviceRunning = false
             handler.removeCallbacksAndMessages(null)
             serviceScope.cancel()
-            runCatching { speechService?.cancel() }
-            runCatching { speechService?.shutdown() }
+            stopCapture()
             runCatching { recognizer?.close() }
             modelManager?.close()
             localTts?.stop()
@@ -613,6 +728,7 @@ class WakeWordService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private companion object {
+        const val TAG = "ZERO-Voice"
         const val SAMPLE_RATE_HZ = 16_000f
         const val RESTART_DELAY_MS = 1_500L
         const val MODEL_LOAD_TIMEOUT_MS = 15_000L

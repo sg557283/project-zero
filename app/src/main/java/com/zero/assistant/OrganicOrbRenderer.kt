@@ -1,29 +1,30 @@
 package com.zero.assistant
 
-import android.content.Context
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.os.SystemClock
+import android.util.Log
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.ShortBuffer
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.min
 import kotlin.math.sin
 
-internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.Renderer {
+internal class OrganicOrbRenderer : GLSurfaceView.Renderer {
     private val mesh = OrganicOrbGeometry.create(4)
-    private val vertices = FloatBuffer.allocate(mesh.vertices.size)
-    private val particles = FloatBuffer.allocate(mesh.particles.size)
+    private val vertices = createFloatBuffer(mesh.vertices)
+    private val particles = createFloatBuffer(mesh.particles)
     private val edgeBuffer = createShortBuffer(mesh.edges)
-    private val stateActivity = AtomicInteger(0)
-    private val stateStrength = java.util.concurrent.atomic.AtomicReference(0.8f)
+    private val stateActivity = AtomicReference(OrbActivity.Idle)
+    private val audioAmplitude = AtomicReference(0f)
     private val reducedMotion = AtomicBoolean(false)
     private var surfaceReady = false
     private var meshProgram = 0
@@ -32,11 +33,15 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
     private val projection = FloatArray(16)
     private val view = FloatArray(16)
     private val modelViewProjection = FloatArray(16)
-    private val startNanos = SystemClock.elapsedRealtimeNanos()
+    private var lastFrameNanos = SystemClock.elapsedRealtimeNanos()
+    private var animationTime = 0f
+    private var currentSpeed = 0.45f
+    private var currentStrength = 0.68f
+    private var currentGlow = 0.7f
 
-    fun setState(activity: Int, strength: Float, reduced: Boolean, publishedNanos: Long) {
+    fun setState(activity: OrbActivity, amplitude: Float, reduced: Boolean) {
         stateActivity.set(activity)
-        stateStrength.set(strength)
+        audioAmplitude.set(amplitude.coerceIn(0f, 1f))
         reducedMotion.set(reduced)
     }
 
@@ -50,8 +55,7 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
         coreProgram = createProgram(CORE_VERTEX, CORE_FRAGMENT)
         particleProgram = createProgram(PARTICLE_VERTEX, PARTICLE_FRAGMENT)
         surfaceReady = meshProgram != 0 && coreProgram != 0 && particleProgram != 0
-        vertices.clear(); vertices.put(mesh.vertices); vertices.position(0)
-        particles.clear(); particles.put(mesh.particles); particles.position(0)
+        lastFrameNanos = SystemClock.elapsedRealtimeNanos()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -64,20 +68,36 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
     override fun onDrawFrame(gl: GL10?) {
         if (!surfaceReady) return
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-        val elapsed = if (reducedMotion.get()) 0f else ((SystemClock.elapsedRealtimeNanos() - startNanos) / 1e9f)
-        val rotation = elapsed * 0.25f
+        val now = SystemClock.elapsedRealtimeNanos()
+        val delta = ((now - lastFrameNanos).coerceIn(0L, 64_000_000L)) / 1_000_000_000f
+        lastFrameNanos = now
+        val activity = stateActivity.get()
+        val amplitude = audioAmplitude.get()
+        val targets = targetsFor(activity, amplitude)
+        if (reducedMotion.get()) {
+            currentSpeed = targets.speed
+            currentStrength = targets.strength
+            currentGlow = targets.glow
+        } else {
+            val blend = min(1f, delta * 5f)
+            currentSpeed += (targets.speed - currentSpeed) * blend
+            currentStrength += (targets.strength - currentStrength) * blend
+            currentGlow += (targets.glow - currentGlow) * blend
+            animationTime += delta * currentSpeed
+        }
+        val rotation = animationTime * 0.25f
         Matrix.setIdentityM(MODEL, 0)
-        Matrix.rotateM(MODEL, 0, rotation.toFloat() * 57.2958f, 0.15f, 1f, 0.12f)
+        Matrix.rotateM(MODEL, 0, rotation * 57.2958f, 0.15f, 1f, 0.12f)
         Matrix.multiplyMM(modelViewProjection, 0, view, 0, MODEL, 0)
         Matrix.multiplyMM(TEMP, 0, projection, 0, modelViewProjection, 0)
         System.arraycopy(TEMP, 0, modelViewProjection, 0, 16)
 
-        drawCore(elapsed)
-        drawMesh(elapsed)
-        drawParticles(elapsed)
+        drawCore(animationTime, activity, currentGlow)
+        drawMesh(animationTime, activity, amplitude, currentStrength, currentGlow)
+        drawParticles(animationTime, activity, currentGlow)
     }
 
-    private fun drawCore(time: Float) {
+    private fun drawCore(time: Float, activity: OrbActivity, glow: Float) {
         GLES20.glUseProgram(coreProgram)
         val position = GLES20.glGetAttribLocation(coreProgram, "aPosition")
         GLES20.glDisable(GLES20.GL_DEPTH_TEST)
@@ -85,58 +105,110 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
         GLES20.glVertexAttribPointer(position, 3, GLES20.GL_FLOAT, false, 12, CORE_BUFFER)
         GLES20.glEnableVertexAttribArray(position)
         GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(coreProgram, "uMvp"), 1, false, modelViewProjection, 0)
-        GLES20.glUniform1f(GLES20.glGetUniformLocation(coreProgram, "uTime"), time)
-        GLES20.glUniform1f(GLES20.glGetUniformLocation(coreProgram, "uActivity"), stateActivity.get().toFloat())
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(coreProgram, "uActivity"), activity.ordinal.toFloat())
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(coreProgram, "uGlow"), glow)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_FAN, 0, 110)
         GLES20.glDepthMask(true)
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
     }
 
-    private fun drawMesh(time: Float) {
+    private fun drawMesh(
+        time: Float,
+        activity: OrbActivity,
+        amplitude: Float,
+        strength: Float,
+        glow: Float,
+    ) {
         GLES20.glUseProgram(meshProgram)
         val position = GLES20.glGetAttribLocation(meshProgram, "aPosition")
         GLES20.glVertexAttribPointer(position, 3, GLES20.GL_FLOAT, false, 12, vertices)
         GLES20.glEnableVertexAttribArray(position)
         GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(meshProgram, "uMvp"), 1, false, modelViewProjection, 0)
         GLES20.glUniform1f(GLES20.glGetUniformLocation(meshProgram, "uTime"), time)
-        GLES20.glUniform1f(GLES20.glGetUniformLocation(meshProgram, "uStrength"), stateStrength.get())
-        GLES20.glUniform1f(GLES20.glGetUniformLocation(meshProgram, "uActivity"), stateActivity.get().toFloat())
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(meshProgram, "uStrength"), strength)
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(meshProgram, "uAmplitude"), amplitude)
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(meshProgram, "uActivity"), activity.ordinal.toFloat())
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(meshProgram, "uGlow"), glow)
         GLES20.glLineWidth(1f)
         edgeBuffer.position(0)
         GLES20.glDrawElements(GLES20.GL_LINES, mesh.edges.size, GLES20.GL_UNSIGNED_SHORT, edgeBuffer)
     }
 
-    private fun drawParticles(time: Float) {
+    private fun drawParticles(time: Float, activity: OrbActivity, glow: Float) {
         GLES20.glUseProgram(particleProgram)
         val position = GLES20.glGetAttribLocation(particleProgram, "aPosition")
         GLES20.glVertexAttribPointer(position, 4, GLES20.GL_FLOAT, false, 16, particles)
         GLES20.glEnableVertexAttribArray(position)
         GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(particleProgram, "uMvp"), 1, false, modelViewProjection, 0)
         GLES20.glUniform1f(GLES20.glGetUniformLocation(particleProgram, "uTime"), time)
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(particleProgram, "uActivity"), activity.ordinal.toFloat())
+        GLES20.glUniform1f(GLES20.glGetUniformLocation(particleProgram, "uGlow"), glow)
         GLES20.glDrawArrays(GLES20.GL_POINTS, 0, 48)
     }
 
+    private fun targetsFor(activity: OrbActivity, amplitude: Float): OrbTargets = when (activity) {
+        OrbActivity.Idle -> OrbTargets(speed = 0.45f, strength = 0.68f, glow = 0.7f)
+        OrbActivity.Listening -> OrbTargets(
+            speed = 1.1f + amplitude * 0.45f,
+            strength = 1.05f + amplitude * 0.9f,
+            glow = 1.1f + amplitude * 0.6f,
+        )
+        OrbActivity.Processing -> OrbTargets(speed = 1.55f, strength = 1.45f, glow = 1.0f)
+        OrbActivity.Speaking -> OrbTargets(
+            speed = 1.0f + amplitude * 0.3f,
+            strength = 0.95f + amplitude * 0.75f,
+            glow = 1.0f + amplitude * 0.7f,
+        )
+    }
+
+    private data class OrbTargets(val speed: Float, val strength: Float, val glow: Float)
+
     private fun createProgram(vertex: String, fragment: String): Int {
-        val vertexId = compile(GLES20.GL_VERTEX_SHADER, vertex) ?: return 0
-        val fragmentId = compile(GLES20.GL_FRAGMENT_SHADER, fragment) ?: return 0
+        val vertexId = compile(GLES20.GL_VERTEX_SHADER, vertex)
+        if (vertexId == 0) return 0
+        val fragmentId = compile(GLES20.GL_FRAGMENT_SHADER, fragment)
+        if (fragmentId == 0) {
+            GLES20.glDeleteShader(vertexId)
+            return 0
+        }
         val program = GLES20.glCreateProgram()
         GLES20.glAttachShader(program, vertexId)
         GLES20.glAttachShader(program, fragmentId)
         GLES20.glLinkProgram(program)
+        GLES20.glDeleteShader(vertexId)
+        GLES20.glDeleteShader(fragmentId)
         val linked = IntArray(1)
         GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linked, 0)
-        if (linked[0] == 0) return 0
+        if (linked[0] == 0) {
+            Log.e("OrganicOrbRenderer", "Shader program link failed: ${GLES20.glGetProgramInfoLog(program)}")
+            GLES20.glDeleteProgram(program)
+            return 0
+        }
         return program
     }
 
-    private fun compile(type: Int, source: String): Int? {
+    private fun compile(type: Int, source: String): Int {
         val shader = GLES20.glCreateShader(type)
         GLES20.glShaderSource(shader, source)
         GLES20.glCompileShader(shader)
         val compiled = IntArray(1)
         GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compiled, 0)
-        return if (compiled[0] == 0) null else shader
+        if (compiled[0] == 0) {
+            Log.e("OrganicOrbRenderer", "Shader compile failed: ${GLES20.glGetShaderInfoLog(shader)}")
+            GLES20.glDeleteShader(shader)
+            return 0
+        }
+        return shader
     }
+
+    private fun createFloatBuffer(values: FloatArray): FloatBuffer =
+        ByteBuffer.allocateDirect(values.size * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder())
+            .asFloatBuffer()
+            .apply {
+                put(values)
+                position(0)
+            }
 
     private fun createShortBuffer(values: IntArray): ShortBuffer {
         val buffer = ByteBuffer.allocateDirect(values.size * 2).order(ByteOrder.nativeOrder()).asShortBuffer()
@@ -156,7 +228,13 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
                 vertices += cos(angle) * 0.82f; vertices += sin(angle) * 0.82f; vertices += -0.12f
             }
             val values = vertices.toFloatArray()
-            ByteBuffer.allocateDirect(values.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().put(values).apply { position(0) }
+            ByteBuffer.allocateDirect(values.size * Float.SIZE_BYTES)
+                .order(ByteOrder.nativeOrder())
+                .asFloatBuffer()
+                .apply {
+                    put(values)
+                    position(0)
+                }
         }
 
         val MESH_VERTEX = """
@@ -165,13 +243,14 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
             uniform mat4 uMvp;
             uniform float uTime;
             uniform float uStrength;
+            uniform float uAmplitude;
             varying vec3 vPosition;
             varying float vDepth;
             vec3 organic(vec3 p) {
                 float wave = sin(p.x * 3.1 + uTime * 0.8) + sin(p.y * 4.2 - uTime * 0.55) + cos(p.z * 3.7 + p.x * 1.4);
                 float macro = sin((p.x + p.y * 0.65) * 2.15 + uTime * 0.29);
                 float ridge = cos((p.z * 3.4 - p.y * 1.25) + uTime * 0.41);
-                float radius = 1.0 + uStrength * 0.018 * wave + 0.018 * macro + 0.012 * ridge;
+                float radius = 1.0 + uStrength * 0.04 * wave + uAmplitude * 0.035 * wave + 0.018 * macro + 0.012 * ridge;
                 return normalize(p) * radius;
             }
             void main() {
@@ -188,6 +267,14 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
             varying float vDepth;
             uniform float uActivity;
             uniform float uTime;
+            uniform float uGlow;
+            uniform float uAmplitude;
+            vec3 stateColor(float activity) {
+                if (activity < 0.5) return vec3(0.63, 0.43, 1.0);
+                if (activity < 1.5) return vec3(0.12, 0.85, 1.0);
+                if (activity < 2.5) return vec3(1.0, 0.22, 0.72);
+                return vec3(0.25, 0.88, 1.0);
+            }
             vec3 palette(vec3 p) {
                 float side = smoothstep(-0.8, 0.8, p.x);
                 float vertical = smoothstep(-0.8, 0.8, p.y);
@@ -202,8 +289,9 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
                 return color;
             }
             void main() {
-                float edge = 0.72 + 0.28 * sin((vPosition.x + vPosition.y) * 7.0 + uTime);
-                vec3 color = palette(vPosition) * edge;
+                float edge = 0.72 + 0.28 * sin((vPosition.x + vPosition.y) * 7.0 + uTime * (0.8 + uGlow * 0.35));
+                vec3 color = mix(palette(vPosition), stateColor(uActivity), 0.18 + clamp(uGlow, 0.0, 1.8) * 0.12);
+                color *= edge * (0.85 + clamp(uGlow, 0.0, 1.8) * 0.35 + uAmplitude * 0.25);
                 float depth = smoothstep(-2.2, 1.0, vDepth);
                 gl_FragColor = vec4(color, (0.30 + 0.48 * depth));
             }
@@ -218,13 +306,19 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
         val CORE_FRAGMENT = """
             precision mediump float;
             varying vec2 vUv;
-            uniform float uTime;
             uniform float uActivity;
+            uniform float uGlow;
+            vec3 stateColor(float activity) {
+                if (activity < 0.5) return vec3(0.63, 0.43, 1.0);
+                if (activity < 1.5) return vec3(0.12, 0.85, 1.0);
+                if (activity < 2.5) return vec3(1.0, 0.22, 0.72);
+                return vec3(0.25, 0.88, 1.0);
+            }
             void main() {
                 float radius = length(vUv);
-                float alpha = smoothstep(1.0, 0.18, radius) * smoothstep(1.0, 0.45, radius);
-                vec3 center = vec3(0.018,0.025,0.055);
-                gl_FragColor = vec4(center, alpha * 0.92);
+                float alpha = (1.0 - smoothstep(0.18, 1.0, radius)) * (1.0 - smoothstep(0.45, 1.0, radius));
+                vec3 center = mix(vec3(0.018,0.025,0.055), stateColor(uActivity), 0.08 + clamp(uGlow, 0.0, 1.8) * 0.04);
+                gl_FragColor = vec4(center, alpha * (0.65 + clamp(uGlow, 0.0, 1.8) * 0.18));
             }
         """.trimIndent()
         val PARTICLE_VERTEX = """
@@ -244,10 +338,13 @@ internal class OrganicOrbRenderer(private val context: Context) : GLSurfaceView.
         val PARTICLE_FRAGMENT = """
             precision mediump float;
             varying float vAlpha;
+            uniform float uActivity;
+            uniform float uGlow;
             void main() {
                 vec2 d = gl_PointCoord - vec2(0.5);
-                float a = smoothstep(0.25, 0.0, length(d));
-                gl_FragColor = vec4(0.48,0.72,1.0,a*vAlpha);
+                float a = 1.0 - smoothstep(0.0, 0.25, length(d));
+                vec3 color = mix(vec3(0.48,0.72,1.0), vec3(0.12,0.85,1.0), clamp(uActivity * 0.33, 0.0, 1.0));
+                gl_FragColor = vec4(color,a*vAlpha*(0.8+uGlow*0.2));
             }
         """.trimIndent()
     }

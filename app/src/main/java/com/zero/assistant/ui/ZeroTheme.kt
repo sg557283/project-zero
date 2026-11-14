@@ -64,9 +64,9 @@ fun zeroDarkColors() = darkColorScheme(
     onPrimary = Color(0xFF071719),
     secondary = Color(0xFFBFC9D4),
     tertiary = Color(0xFF9CA7FF),
-    background = Color(0xFF090B10),
+    background = Color(0xFF090A0F),
     onBackground = Color(0xFFF3F7FA),
-    surface = Color(0xFF10141B),
+    surface = Color(0xFF131620),
     onSurface = Color(0xFFF3F7FA),
     surfaceVariant = Color(0xFF1A2029),
     onSurfaceVariant = Color(0xFFB6C0CA),
@@ -99,7 +99,7 @@ fun ZeroTheme(mode: ZeroThemeMode, content: @Composable () -> Unit) {
 
 @Composable
 fun GlassCard(modifier: Modifier = Modifier, shape: Shape = ZeroGlassTokens.cardShape, content: @Composable () -> Unit) {
-    val isDark = MaterialTheme.colorScheme.background == Color(0xFF090B10)
+    val isDark = MaterialTheme.colorScheme.background == Color(0xFF090A0F)
     val surface = if (isDark) Color(0xFF151A22).copy(alpha = 0.82f) else Color.White.copy(alpha = 0.82f)
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -128,8 +128,9 @@ fun ThemeModeSelector(mode: ZeroThemeMode, onModeChange: (ZeroThemeMode) -> Unit
             FilterChip(
                 selected = mode == option,
                 onClick = { onModeChange(option) },
+                modifier = Modifier.weight(1f),
                 shape = ZeroGlassTokens.capsuleShape,
-                label = { Text(option.label) },
+                label = { Text(option.name, maxLines = 1, softWrap = false) },
             )
         }
     }

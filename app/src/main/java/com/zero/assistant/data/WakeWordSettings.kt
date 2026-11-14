@@ -9,6 +9,14 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object WakeWordSettings {
+    enum class Sensitivity(
+        val vadThreshold: Float,
+        val keywordThreshold: Float,
+        val keywordBoost: Float,
+    ) {
+        Normal(vadThreshold = 0.35f, keywordThreshold = 0.35f, keywordBoost = 1.0f),
+        LowVoice(vadThreshold = 0.20f, keywordThreshold = 0.20f, keywordBoost = 2.8f),
+    }
     const val ACTION_START = "com.zero.assistant.action.START_WAKE_WORD"
     const val ACTION_ACTIVATE = "com.zero.assistant.action.ACTIVATE_ZERO"
     const val ACTION_STOP = "com.zero.assistant.action.STOP_WAKE_WORD"
@@ -18,9 +26,16 @@ object WakeWordSettings {
     const val ACTION_SETTINGS_CHANGED = "com.zero.assistant.action.WAKE_WORD_SETTINGS_CHANGED"
     const val ACTION_PHRASES_CHANGED = "com.zero.assistant.action.WAKE_WORD_PHRASES_CHANGED"
     const val ACTION_ASSISTANT_PANEL = "com.zero.assistant.action.ASSISTANT_PANEL"
+    const val ACTION_ON_SCREEN_ACTION = "com.zero.assistant.action.ON_SCREEN_ACTION"
+    const val ACTION_SPEECH_MODEL_CHANGED = "com.zero.assistant.action.SPEECH_MODEL_CHANGED"
+    const val ACTION_WAKE_SENSITIVITY_CHANGED = "com.zero.assistant.action.WAKE_SENSITIVITY_CHANGED"
+    const val EXTRA_ON_SCREEN_ACTION = "com.zero.assistant.extra.ON_SCREEN_ACTION"
     const val EXTRA_PANEL_MESSAGE = "com.zero.assistant.extra.PANEL_MESSAGE"
     const val EXTRA_PANEL_DISMISS = "com.zero.assistant.extra.PANEL_DISMISS"
     const val EXTRA_PANEL_DISMISS_AFTER_MS = "com.zero.assistant.extra.PANEL_DISMISS_AFTER_MS"
+    const val EXTRA_PANEL_PREVIEW = "com.zero.assistant.extra.PANEL_PREVIEW"
+    const val EXTRA_PANEL_FACE_MODE = "com.zero.assistant.extra.PANEL_FACE_MODE"
+    const val EXTRA_PANEL_PENDING_TEXT = "com.zero.assistant.extra.PANEL_PENDING_TEXT"
     const val CHANNEL_ID = "zero_background_voice"
     const val NOTIFICATION_ID = 7101
 
@@ -32,8 +47,18 @@ object WakeWordSettings {
     private const val KEY_ERROR = "error"
     private const val KEY_LAST_DETECTION = "last_detection"
     private const val KEY_HEARTBEAT = "service_heartbeat"
+    private const val KEY_SENSITIVITY = "sensitivity"
 
     fun enabled(context: Context): Boolean = preferences(context).getBoolean(KEY_ENABLED, false)
+
+    fun sensitivity(context: Context): Sensitivity =
+        runCatching { Sensitivity.valueOf(preferences(context).getString(KEY_SENSITIVITY, null) ?: Sensitivity.Normal.name) }
+            .getOrDefault(Sensitivity.Normal)
+
+    fun setSensitivity(context: Context, sensitivity: Sensitivity) {
+        preferences(context).edit().putString(KEY_SENSITIVITY, sensitivity.name).apply()
+        context.sendBroadcast(android.content.Intent(ACTION_WAKE_SENSITIVITY_CHANGED).setPackage(context.packageName))
+    }
 
     fun active(context: Context): Boolean {
         val preferences = preferences(context)
@@ -116,12 +141,36 @@ object WakeWordSettings {
         broadcastChanged(context)
     }
 
-    fun updateAssistantPanel(context: Context, message: String, dismissAfterMillis: Long = 0L) {
+    fun updateAssistantPanel(
+        context: Context,
+        message: String,
+        dismissAfterMillis: Long = 0L,
+        preview: Boolean = false,
+        faceMode: String? = null,
+        pendingText: String? = null,
+    ) {
         context.sendBroadcast(
             android.content.Intent(ACTION_ASSISTANT_PANEL)
                 .setPackage(context.packageName)
                 .putExtra(EXTRA_PANEL_MESSAGE, message)
-                .putExtra(EXTRA_PANEL_DISMISS_AFTER_MS, dismissAfterMillis),
+                .putExtra(EXTRA_PANEL_DISMISS_AFTER_MS, dismissAfterMillis)
+                .putExtra(EXTRA_PANEL_PREVIEW, preview)
+                .putExtra(EXTRA_PANEL_FACE_MODE, faceMode)
+                .putExtra(EXTRA_PANEL_PENDING_TEXT, pendingText),
+        )
+    }
+
+    fun requestOnScreenAction(context: Context, command: String) {
+        context.sendBroadcast(
+            android.content.Intent(ACTION_ON_SCREEN_ACTION)
+                .setPackage(context.packageName)
+                .putExtra(EXTRA_ON_SCREEN_ACTION, command),
+        )
+    }
+
+    fun notifySpeechModelChanged(context: Context) {
+        context.sendBroadcast(
+            android.content.Intent(ACTION_SPEECH_MODEL_CHANGED).setPackage(context.packageName),
         )
     }
 

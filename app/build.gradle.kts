@@ -44,6 +44,7 @@ android {
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.08.00"))
+    implementation("androidx.compose.animation:animation")
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.fragment:fragment-ktx:1.8.9")
@@ -54,7 +55,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
     implementation("com.alphacephei:vosk-android:0.3.75")
+    implementation(files("libs/sherpa-onnx-2.0.1.aar"))
     implementation("com.google.code.gson:gson:2.13.2")
+    implementation("org.apache.commons:commons-compress:1.28.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("androidx.work:work-runtime-ktx:2.10.5")
     implementation("androidx.camera:camera-camera2:1.4.2")
