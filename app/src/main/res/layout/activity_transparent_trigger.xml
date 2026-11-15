@@ -9,7 +9,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
         android:layout_margin="16dp"
-        android:background="@drawable/zero_widget_background"
+        android:background="@drawable/zero_trigger_background"
         android:elevation="12dp"
         android:orientation="vertical"
         android:padding="20dp">
@@ -18,21 +18,21 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="ZERO voice command"
-            android:textColor="@color/zero_widget_text"
+            android:textColor="@color/zero_trigger_text"
             android:textSize="18sp"
             android:textStyle="bold" />
 
         <TextView
-            android:id="@+id/widget_voice_message"
+            android:id="@+id/trigger_message"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="Preparing on-device listening..."
-            android:textColor="@color/zero_widget_text"
+            android:textColor="@color/zero_trigger_text"
             android:textSize="14sp" />
 
         <Button
-            android:id="@+id/widget_voice_cancel"
+            android:id="@+id/trigger_cancel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="end"

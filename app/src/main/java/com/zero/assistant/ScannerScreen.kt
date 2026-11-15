@@ -85,7 +85,7 @@ internal fun ScannerScreen(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Knowledge Scanner", style = MaterialTheme.typography.titleLarge)
+        Text("Offline OCR", style = MaterialTheme.typography.titleLarge)
         Text("Capture or select an image and extract text locally with the bundled ML Kit Latin recognizer.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

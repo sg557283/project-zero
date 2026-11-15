@@ -6,7 +6,7 @@ import android.media.AudioManager
 import android.view.KeyEvent
 import com.zero.assistant.MainActivity
 import com.zero.assistant.BotBubbleAction
-import com.zero.assistant.TransparentWidgetCameraActivity
+import com.zero.assistant.TransparentBotCameraActivity
 import com.zero.assistant.TransparentVoiceTriggerActivity
 import com.zero.assistant.core.AssistantAction
 
@@ -82,7 +82,7 @@ object ActionExecutor {
             }
             BotBubbleAction.Flashlight -> {
                 context.startActivity(
-                    Intent(context, TransparentWidgetCameraActivity::class.java)
+                    Intent(context, TransparentBotCameraActivity::class.java)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
                 return "Checking flashlight access."

@@ -147,12 +147,17 @@ class VaultManager(context: Context) {
     }
 
     fun files(): List<VaultFile> = runCatching {
+        readManifest()
+    }.getOrElse { emptyList() }
+
+    private fun readManifest(): List<VaultFile> {
         val key = requireUnlocked()
         val manifest = encryptedManifestFile()
         if (!manifest.exists()) return emptyList()
         val json = decryptBytes(manifest.readBytes(), key, MANIFEST_AAD).toString(StandardCharsets.UTF_8)
-        gson.fromJson<List<VaultFile>>(json, object : TypeToken<List<VaultFile>>() {}.type) ?: emptyList()
-    }.getOrElse { emptyList() }
+        return gson.fromJson<List<VaultFile>>(json, object : TypeToken<List<VaultFile>>() {}.type)
+            ?: throw IllegalStateException("Vault index is empty or damaged.")
+    }
 
     fun storageHealthy(): Boolean = runCatching {
         requireUnlocked()
@@ -194,13 +199,20 @@ class VaultManager(context: Context) {
     fun import(uri: Uri, displayName: String, folderId: String = "", mimeType: String? = null): Result<VaultFile> = runCatching {
         val key = requireUnlocked()
         val id = UUID.randomUUID().toString()
-        val persistedSourceUri = runCatching {
+        val persistedSourceAccess = runCatching {
             appContext.contentResolver.takePersistableUriPermission(
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
-            uri.toString()
-        }.getOrNull()
+        }.isSuccess || runCatching {
+            appContext.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }.isSuccess
+        if (!persistedSourceAccess) {
+            android.util.Log.w("ZERO-Vault", "Source access could not be persisted; permanent deletion may require reopening the source.")
+        }
         val encrypted = File(vaultDirectory, id)
         val temp = File(vaultDirectory, "$id.tmp")
         check(!encrypted.exists() && !temp.exists()) { "Vault file identifier collision." }
@@ -228,7 +240,7 @@ class VaultManager(context: Context) {
                 System.currentTimeMillis(),
                 mimeType ?: appContext.contentResolver.getType(uri) ?: "application/octet-stream",
                 folderId,
-                sourceUri = persistedSourceUri,
+                sourceUri = uri.toString(),
             )
             saveManifest(files() + file)
             file
@@ -272,6 +284,25 @@ class VaultManager(context: Context) {
 
     fun permanentlyDelete(file: VaultFile): Result<Unit> = runCatching {
         check(file.trashedMillis.isPresent()) { "Move the file to Trash before permanent deletion." }
+        val manifest = readManifest()
+        val entry = manifest.firstOrNull { it.id == file.id }
+            ?: throw IllegalStateException("This file is no longer in the Vault.")
+        check(entry.trashedMillis.isPresent()) { "Move the file to Trash before permanent deletion." }
+        val source = entry.sourceUri?.let(Uri::parse)
+        if (source != null) {
+            val deleted = runCatching {
+                if (DocumentsContract.isDocumentUri(appContext, source)) {
+                    DocumentsContract.deleteDocument(appContext.contentResolver, source)
+                } else {
+                    appContext.contentResolver.delete(source, null, null) > 0
+                }
+            }.getOrElse { failure ->
+                throw IllegalStateException("The imported original could not be deleted. Keep it in Trash and grant Android access before retrying: ${failure.message ?: "permission unavailable"}.")
+            }
+            check(deleted) {
+                "The imported original could not be deleted. Keep it in Trash and grant Android access before retrying."
+            }
+        }
         val encrypted = File(vaultDirectory, file.id)
         if (encrypted.exists()) {
             overwriteBeforeDelete(encrypted)
@@ -284,21 +315,8 @@ class VaultManager(context: Context) {
                     throw IllegalStateException("A decrypted preview could not be removed from cache.")
                 }
             }
-        saveManifest(files().filterNot { it.id == file.id })
-        val source = file.sourceUri?.let(Uri::parse)
+        saveManifest(manifest.filterNot { it.id == file.id })
         if (source != null) {
-            val deleted = runCatching {
-                if (DocumentsContract.isDocumentUri(appContext, source)) {
-                    DocumentsContract.deleteDocument(appContext.contentResolver, source)
-                } else {
-                    appContext.contentResolver.delete(source, null, null) > 0
-                }
-            }.getOrElse { failure ->
-                throw IllegalStateException("Vault copy was removed, but Android could not delete the imported original: ${failure.message ?: "permission unavailable"}.")
-            }
-            if (!deleted) {
-                throw IllegalStateException("Vault copy was removed, but Android did not delete the imported original.")
-            }
             runCatching {
                 appContext.contentResolver.releasePersistableUriPermission(
                     source,

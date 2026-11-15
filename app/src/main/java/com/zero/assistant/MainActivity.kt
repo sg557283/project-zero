@@ -103,7 +103,6 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -714,9 +713,18 @@ private fun ZeroApp(
 
     fun answerOnlineQuestion(query: String) {
         val config = aiProviderSettings.configuration()
-        val apiKey = aiProviderSettings.apiKey()
-        if (!config.enabled || apiKey.isNullOrBlank() || !hasValidatedInternet(context)) {
+        if (!config.enabled || !config.hasApiKey || !hasValidatedInternet(context)) {
             showResult(query, "Online AI is unavailable. ZERO can still handle supported offline commands, reminders, notes, battery status, and identity questions.")
+            return
+        }
+        val apiKey = try {
+            aiProviderSettings.apiKey()
+        } catch (failure: Exception) {
+            showResult(query, "The selected API key could not be decrypted (${failure.message ?: "Android Keystore error"}). Clear and save the key again in Settings.")
+            return
+        }
+        if (apiKey.isNullOrBlank()) {
+            showResult(query, "The selected API profile has no saved API key. Add one in Settings before sending an online question.")
             return
         }
         if (speechOutput && thinkingCuesEnabled) {
@@ -991,7 +999,7 @@ private fun ZeroApp(
                             Page.Settings -> "System Settings"
                             Page.SpeechModels -> "Voice Library"
                             Page.VoiceStudio -> "Offline Voice Studio"
-                            Page.Scanner -> "Knowledge Scanner"
+                            Page.Scanner -> "Offline OCR"
                             Page.Planner -> "Planner"
                             Page.BatteryAlerts -> "Battery Alerts"
                             Page.Notes -> "Notes"
@@ -1596,10 +1604,10 @@ private fun HomeCapsuleDock(
     Box(
         modifier
             .fillMaxWidth()
-            .height(78.dp)
+            .height(70.dp)
             .padding(horizontal = 18.dp)
-            .background(Color(0xFF131620), dockShape)
-            .border(1.dp, Color(0xFF23283A), dockShape),
+            .background(MaterialTheme.colorScheme.surface, dockShape)
+            .border(1.dp, MaterialTheme.colorScheme.onSurface, dockShape),
     ) {
         Row(
             Modifier.fillMaxWidth().align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1609,7 +1617,7 @@ private fun HomeCapsuleDock(
             DockIconButton("⊞", "Tools Grid", onTools)
             DockIconButton("⌨", "Keyboard or text input", onKeyboard)
             Spacer(Modifier.width(58.dp))
-            DockIconButton("◷", "Daily Planner", onPlanner, fontSize = 26.sp)
+            DockIconButton("◷", "Daily Planner", onPlanner, fontSize = 30.sp)
             IconButton(onClick = onVault, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Default.Lock, contentDescription = "ZERO Vault", tint = MaterialTheme.colorScheme.onSurface)
             }
@@ -1617,7 +1625,7 @@ private fun HomeCapsuleDock(
         Box(
             Modifier
                 .align(Alignment.TopCenter)
-                .offset(y = (-28).dp)
+                .offset(y = (-24).dp)
                 .size(56.dp)
                 .background(
                     Brush.radialGradient(listOf(Color(0xFF5AF3FF), Color(0xFF08AFC7), Color(0xFF17485B))),
@@ -1726,10 +1734,6 @@ private fun SettingsScreen(
     var phraseEditorError by remember { mutableStateOf<String?>(null) }
     var vaultMenuExpanded by remember { mutableStateOf(false) }
     var aiConfiguration by remember { mutableStateOf(aiProviderSettings.configuration()) }
-    var aiEndpoint by remember { mutableStateOf(aiConfiguration.endpoint) }
-    var aiModel by remember { mutableStateOf(aiConfiguration.model) }
-    var apiKeyDraft by remember { mutableStateOf("") }
-    var aiSettingsMessage by remember { mutableStateOf<String?>(null) }
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1861,59 +1865,11 @@ private fun SettingsScreen(
         TextButton(onClick = {
             runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
         }) { Text("Battery optimization guidance") }
-        Text("Optional online AI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-        SettingSwitch(
-            "Enable online AI",
-            if (aiConfiguration.hasApiKey) "Disabled by default. Each unsupported question requires confirmation before text is sent." else "Disabled. Save an API key before enabling; local commands remain available without one.",
-            aiConfiguration.enabled,
-            { enabled ->
-                aiProviderSettings.saveConfiguration(aiEndpoint, aiModel, enabled)
-                    .onSuccess { aiConfiguration = aiProviderSettings.configuration(); aiSettingsMessage = null }
-                    .onFailure { aiSettingsMessage = it.message ?: "AI settings could not be saved." }
-            },
+        MultiApiProviderSettings(
+            settings = aiProviderSettings,
+            initialConfiguration = aiConfiguration,
+            onConfigurationChanged = { aiConfiguration = it },
         )
-        OutlinedTextField(
-            value = aiEndpoint,
-            onValueChange = { aiEndpoint = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("HTTPS Chat Completions endpoint") },
-            singleLine = true,
-        )
-        OutlinedTextField(
-            value = aiModel,
-            onValueChange = { aiModel = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Provider model identifier") },
-            singleLine = true,
-        )
-        OutlinedTextField(
-            value = apiKeyDraft,
-            onValueChange = { apiKeyDraft = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(if (aiConfiguration.hasApiKey) "Replace API key" else "API key") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = {
-                aiProviderSettings.saveConfiguration(aiEndpoint, aiModel, aiConfiguration.enabled)
-                    .onSuccess {
-                        if (apiKeyDraft.isBlank() || aiProviderSettings.saveApiKey(apiKeyDraft)) {
-                            apiKeyDraft = ""
-                            aiConfiguration = aiProviderSettings.configuration()
-                            aiSettingsMessage = "Settings saved. Each online question still asks before sending."
-                        } else aiSettingsMessage = "The API key could not be encrypted by Android Keystore."
-                    }
-                    .onFailure { aiSettingsMessage = it.message ?: "AI settings could not be saved." }
-            }) { Text("Save AI settings") }
-            TextButton(onClick = {
-                aiProviderSettings.clearApiKey()
-                aiConfiguration = aiProviderSettings.configuration()
-                aiSettingsMessage = "Saved API key removed from this device."
-            }, enabled = aiConfiguration.hasApiKey) { Text("Clear key") }
-        }
-        Text("The key is encrypted with Android Keystore, but secrets used by a distributed app cannot be guaranteed safe from extraction. Enter only a provider endpoint and key you trust; ZERO sends text only after confirmation and never sends microphone audio.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        aiSettingsMessage?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
         Text("Hardware activation", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
         SettingSwitch("Volume Up + Volume Down shortcut", "Optional accessibility key-event shortcut. Turn it on here, then enable ZERO in Android Accessibility settings. Ordinary volume presses are not consumed; the Volume Up + Volume Down accessibility shortcut remains system-controlled.", volumeShortcut, { enabled ->
             volumeShortcut = enabled

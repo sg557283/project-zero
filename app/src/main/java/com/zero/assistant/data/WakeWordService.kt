@@ -32,7 +32,6 @@ import androidx.core.content.ContextCompat
 import com.zero.assistant.MainActivity
 import com.zero.assistant.R
 import com.zero.assistant.FloatingBotOverlayService
-import com.zero.assistant.ZeroAssistantWidget
 import com.zero.assistant.core.AssistantCommand
 import com.zero.assistant.core.CommandParser
 import com.zero.assistant.core.AssistantIdentity
@@ -59,8 +58,8 @@ class WakeWordService : Service() {
     private var serviceRunning = false
     private var awaitingCommand = false
     private var commandCapture = false
-    private var widgetOneShot = false
-    private var widgetCommandRequested = false
+    private var oneShotCommand = false
+    private var oneShotCommandRequested = false
     private var captureActive = false
     private var transitioningFromWake = false
     private var speaking = false
@@ -87,7 +86,10 @@ class WakeWordService : Service() {
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
             if (!serviceRunning) return
-            if (captureActive || awaitingCommand || speaking) WakeWordSettings.recordHeartbeat(this@WakeWordService)
+            if (captureActive || awaitingCommand || speaking) {
+                WakeWordSettings.recordHeartbeat(this@WakeWordService)
+                acquireCpuWakeLock()
+            }
             handler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
         }
     }
@@ -108,7 +110,10 @@ class WakeWordService : Service() {
                     startCapture(commandMode = awaitingCommand)
                 }
             }
-        }.also(SmartAudioFocusManager::start)
+        }.also { manager ->
+            runCatching { manager.start() }
+                .onFailure { Log.w(TAG, "Microphone coexistence monitoring is unavailable.", it) }
+        }
         createNotificationChannel()
         initializeLocalTts()
         ContextCompat.registerReceiver(
@@ -123,9 +128,9 @@ class WakeWordService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == WakeWordSettings.ACTION_WIDGET_COMMAND) {
-            widgetOneShot = true
-            widgetCommandRequested = true
+        if (intent?.action == WakeWordSettings.ACTION_ONE_SHOT_COMMAND) {
+            oneShotCommand = true
+            oneShotCommandRequested = true
         }
         if (intent?.action == WakeWordSettings.ACTION_ACTIVATE) {
             WakeWordSettings.setEnabled(this, true)
@@ -136,34 +141,43 @@ class WakeWordService : Service() {
             return START_NOT_STICKY
         }
         if (intent?.action == WakeWordSettings.ACTION_START) WakeWordSettings.setEnabled(this, true)
-        if (!WakeWordSettings.enabled(this) && !widgetOneShot) {
+        if (!WakeWordSettings.enabled(this) && !oneShotCommand) {
             stopListeningService()
             return START_NOT_STICKY
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             WakeWordSettings.setActive(this, false, "Microphone permission is required to resume background listening.")
-            if (widgetOneShot) ZeroAssistantWidget.setTemporaryStatus(this, "Microphone permission is required", 5_000L)
+            WakeWordSettings.setEnabled(this, false)
             stopSelf(startId)
             return START_NOT_STICKY
         }
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             WakeWordSettings.setActive(this, false, "Notification permission is required to show persistent microphone controls.")
-            if (widgetOneShot) ZeroAssistantWidget.setTemporaryStatus(this, "Allow ZERO notifications to use voice input", 5_000L)
+            WakeWordSettings.setEnabled(this, false)
             stopSelf(startId)
             return START_NOT_STICKY
         }
 
         serviceRunning = true
+        try {
+            startForegroundCompat(buildNotification("Wake listening is active. Microphone access is in use."))
+        } catch (failure: SecurityException) {
+            handleForegroundStartFailure(startId, failure)
+            return START_NOT_STICKY
+        } catch (failure: IllegalStateException) {
+            handleForegroundStartFailure(startId, failure)
+            return START_NOT_STICKY
+        }
         acquireCpuWakeLock()
-        startForegroundCompat(buildNotification("Wake listening is active. Microphone access is in use."))
-        if (widgetCommandRequested) {
-            widgetCommandRequested = false
+        handler.removeCallbacks(heartbeatRunnable)
+        handler.postDelayed(heartbeatRunnable, HEARTBEAT_INTERVAL_MS)
+        if (oneShotCommandRequested) {
+            oneShotCommandRequested = false
             awaitingCommand = true
             smartAudioFocus?.requestCommandFocus()
             if (!startCapture(commandMode = true)) {
                 awaitingCommand = false
-                resumeAfterCommand()
-                ZeroAssistantWidget.setTemporaryStatus(this, "On-device voice input is unavailable", 5_000L)
+                finishOneShotCommand()
             }
             return START_NOT_STICKY
         }
@@ -175,6 +189,20 @@ class WakeWordService : Service() {
         return START_STICKY
     }
 
+    private fun handleForegroundStartFailure(startId: Int, failure: RuntimeException) {
+        Log.e(TAG, "Microphone foreground service could not start.", failure)
+        serviceRunning = false
+        WakeWordSettings.setEnabled(this, false)
+        WakeWordSettings.setActive(
+            this,
+            false,
+            failure.message ?: "Android denied microphone foreground-service startup. Enable wake listening again while ZERO is visible.",
+        )
+        releaseCpuWakeLock()
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        stopSelf(startId)
+    }
+
     private fun beginLoadingModel() {
         if (!serviceRunning) return
         if (!startCapture(commandMode = false)) {
@@ -183,7 +211,7 @@ class WakeWordService : Service() {
     }
 
     private fun startCapture(commandMode: Boolean): Boolean {
-        if (!serviceRunning || (!WakeWordSettings.enabled(this) && !widgetOneShot)) return false
+        if (!serviceRunning || (!WakeWordSettings.enabled(this) && !oneShotCommand)) return false
         if (!microphoneAvailable) return false
         if (!commandMode) smartAudioFocus?.releaseCommandFocus()
         stopCapture()
@@ -252,7 +280,6 @@ class WakeWordService : Service() {
             override fun onReadyForSpeech(params: Bundle?) {
                 updateNotification("Say your command. On-device recognition is active.")
                 WakeWordSettings.updateAssistantPanel(this@WakeWordService, "Listening. Say your command now.")
-                ZeroAssistantWidget.setTemporaryStatus(this@WakeWordService, "Listening...", COMMAND_CAPTURE_TIMEOUT_MS.toLong())
             }
 
             override fun onResults(results: Bundle?) {
@@ -427,16 +454,23 @@ class WakeWordService : Service() {
 
     private fun resumeAfterCommand() {
         transitioningFromWake = false
-        ZeroAssistantWidget.clearTemporaryStatus(this)
-        if (!serviceRunning) return
-        if (widgetOneShot) {
-            widgetOneShot = false
-            if (!WakeWordSettings.enabled(this)) {
-                stopListeningService()
-                return
-            }
+        if (oneShotCommand) {
+            finishOneShotCommand()
+            return
         }
+        if (!serviceRunning) return
         if (!awaitingCommand && !captureActive) startCapture(commandMode = false)
+    }
+
+    private fun finishOneShotCommand() {
+        oneShotCommand = false
+        oneShotCommandRequested = false
+        awaitingCommand = false
+        if (WakeWordSettings.enabled(this)) {
+            if (serviceRunning && !captureActive) startCapture(commandMode = false)
+        } else {
+            stopListeningService()
+        }
     }
 
     private fun initializeLocalTts() {
@@ -627,11 +661,19 @@ class WakeWordService : Service() {
     }
 
     private fun acquireCpuWakeLock() {
-        if (cpuWakeLock?.isHeld == true) return
-        val powerManager = getSystemService(PowerManager::class.java) ?: return
-        cpuWakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:WakeRecognition").apply {
-            setReferenceCounted(false)
-            acquire()
+        try {
+            val powerManager = getSystemService(PowerManager::class.java) ?: return
+            val wakeLock = cpuWakeLock ?: powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "$packageName:WakeRecognition",
+            ).apply {
+                setReferenceCounted(false)
+                cpuWakeLock = this
+            }
+            if (wakeLock.isHeld) wakeLock.release()
+            wakeLock.acquire(HEARTBEAT_INTERVAL_MS + WAKE_LOCK_RENEWAL_MARGIN_MS)
+        } catch (failure: SecurityException) {
+            Log.w(TAG, "CPU wake lock is unavailable; Android may pause microphone processing.", failure)
         }
     }
 
@@ -745,6 +787,7 @@ class WakeWordService : Service() {
         const val WAKE_DEBOUNCE_MS = 2_500L
         const val DUPLICATE_WINDOW_MS = 1_500L
         const val HEARTBEAT_INTERVAL_MS = 8_000L
+        const val WAKE_LOCK_RENEWAL_MARGIN_MS = 5_000L
         const val CONTENT_REQUEST_CODE = 7103
         const val STOP_REQUEST_CODE = 7104
         const val REVIEW_REQUEST_CODE = 7105

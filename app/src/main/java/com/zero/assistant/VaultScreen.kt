@@ -75,7 +75,7 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
         exportFile = null
         if (destination != null && selected != null) {
             manager.export(selected, destination)
-                .onSuccess { notice = "Export complete. The original remains encrypted in the Vault." }
+                .onSuccess { notice = "Exported a copy. The Vault copy remains encrypted." }
                 .onFailure { notice = it.message ?: "Export failed safely." }
         }
     }
@@ -83,7 +83,7 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
         uri?.let {
             val name = documentName(context, it) ?: "private-file"
             manager.import(it, name)
-                .onSuccess { notice = "Imported and encrypted."; refresh++ }
+                .onSuccess { notice = "Copied and encrypted. The source remains in system Files until permanent deletion."; refresh++ }
                 .onFailure { notice = it.message ?: "Import failed safely; no file was added." }
         }
     }
@@ -242,7 +242,7 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
         }) { Text("Restore") } }, dismissButton = { TextButton(onClick = { restoreUri = null }) { Text("Cancel") } })
     }
     permanentFile?.let { file ->
-        AlertDialog(onDismissRequest = { permanentFile = null }, title = { Text("Delete file permanently?") }, text = { Text("This removes the Vault copy and, when Android still grants access, the original imported file. Flash storage cannot guarantee forensic overwriting.") }, confirmButton = { TextButton(onClick = { manager.permanentlyDelete(file).onSuccess { notice = if (file.sourceUri != null) "Vault file and accessible source permanently deleted." else "Vault file permanently deleted."; refresh++ }.onFailure { notice = it.message }; permanentFile = null }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { permanentFile = null }) { Text("Cancel") } })
+        AlertDialog(onDismissRequest = { permanentFile = null }, title = { Text("Delete file permanently?") }, text = { Text("ZERO removes the imported source and encrypted Vault copy. If Android denies access to the source file, deletion fails and the Vault entry remains in Trash. Flash storage cannot guarantee forensic overwriting.") }, confirmButton = { TextButton(onClick = { manager.permanentlyDelete(file).onSuccess { notice = if (file.sourceUri != null) "Vault file and accessible source permanently deleted." else "Vault file permanently deleted."; refresh++ }.onFailure { notice = it.message }; permanentFile = null }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { permanentFile = null }) { Text("Cancel") } })
     }
 }
 

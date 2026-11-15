@@ -1,0 +1,5 @@
+<resources>
+    <color name="zero_trigger_background">#171922</color>
+    <color name="zero_trigger_outline">#454A5A</color>
+    <color name="zero_trigger_text">#FFFFFF</color>
+</resources>

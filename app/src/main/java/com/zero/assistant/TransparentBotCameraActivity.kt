@@ -9,15 +9,12 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 import com.zero.assistant.data.TorchController
 
-class TransparentWidgetCameraActivity : Activity() {
+class TransparentBotCameraActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_widget_voice_trigger)
-        findViewById<TextView>(R.id.widget_voice_message).text = "Allow camera access to toggle the flashlight."
-        findViewById<Button>(R.id.widget_voice_cancel).setOnClickListener {
-            ZeroAssistantWidget.clearTemporaryStatus(this)
-            finish()
-        }
+        setContentView(R.layout.activity_transparent_trigger)
+        findViewById<TextView>(R.id.trigger_message).text = "Allow camera access to toggle the flashlight."
+        findViewById<Button>(R.id.trigger_cancel).setOnClickListener { finish() }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             toggleTorch()
         } else {
@@ -32,24 +29,20 @@ class TransparentWidgetCameraActivity : Activity() {
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
             toggleTorch()
         } else {
-            ZeroAssistantWidget.setTemporaryStatus(this, "Camera permission is needed for flashlight", 5_000L)
-            finish()
+            findViewById<TextView>(R.id.trigger_message).text = "Camera permission is needed for flashlight."
+            findViewById<Button>(R.id.trigger_cancel).text = "Close"
         }
     }
 
     private fun toggleTorch() {
         TorchController.toggle(this).fold(
             onSuccess = { enabled ->
-                ZeroAssistantWidget.setTemporaryStatus(this, if (enabled) "Flashlight on" else "Flashlight off", 2_500L)
-                finish()
+                findViewById<TextView>(R.id.trigger_message).text = if (enabled) "Flashlight on." else "Flashlight off."
+                findViewById<Button>(R.id.trigger_cancel).text = "Close"
             },
             onFailure = { failure ->
-                ZeroAssistantWidget.setTemporaryStatus(
-                    this,
-                    failure.message?.take(36) ?: "Flashlight unavailable",
-                    5_000L,
-                )
-                finish()
+                findViewById<TextView>(R.id.trigger_message).text = failure.message ?: "Flashlight unavailable."
+                findViewById<Button>(R.id.trigger_cancel).text = "Close"
             },
         )
     }

@@ -14,15 +14,12 @@ import com.zero.assistant.data.WakeWordSettings
 class TransparentVoiceTriggerActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_widget_voice_trigger)
-        findViewById<Button>(R.id.widget_voice_cancel).setOnClickListener {
-            ZeroAssistantWidget.clearTemporaryStatus(this)
-            finish()
-        }
+        setContentView(R.layout.activity_transparent_trigger)
+        findViewById<Button>(R.id.trigger_cancel).setOnClickListener { finish() }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             startVoiceCommand()
         } else {
-            findViewById<TextView>(R.id.widget_voice_message).text = "ZERO needs microphone access to hear a command."
+            findViewById<TextView>(R.id.trigger_message).text = "ZERO needs microphone access to hear a command."
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_AUDIO)
         }
     }
@@ -34,25 +31,25 @@ class TransparentVoiceTriggerActivity : Activity() {
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
             startVoiceCommand()
         } else {
-            ZeroAssistantWidget.setTemporaryStatus(this, "Microphone permission is required", 5_000L)
             finish()
         }
     }
 
     private fun startVoiceCommand() {
         try {
-            ZeroAssistantWidget.setTemporaryStatus(this, "Listening...", 60_000L)
             ContextCompat.startForegroundService(
                 this,
-                Intent(this, WakeWordService::class.java).setAction(WakeWordSettings.ACTION_WIDGET_COMMAND),
+                Intent(this, WakeWordService::class.java).setAction(WakeWordSettings.ACTION_ONE_SHOT_COMMAND),
             )
             finish()
         } catch (failure: SecurityException) {
-            ZeroAssistantWidget.setTemporaryStatus(this, "Voice service permission is unavailable", 5_000L)
-            finish()
+            findViewById<TextView>(R.id.trigger_message).text =
+                failure.message ?: "Android denied microphone service startup."
+            findViewById<Button>(R.id.trigger_cancel).text = "Close"
         } catch (failure: IllegalStateException) {
-            ZeroAssistantWidget.setTemporaryStatus(this, "ZERO could not start voice input", 5_000L)
-            finish()
+            findViewById<TextView>(R.id.trigger_message).text =
+                failure.message ?: "ZERO could not start voice input."
+            findViewById<Button>(R.id.trigger_cancel).text = "Close"
         }
     }
 

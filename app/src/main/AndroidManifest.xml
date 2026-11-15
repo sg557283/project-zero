@@ -69,26 +69,12 @@
             android:name=".TransparentVoiceTriggerActivity"
             android:excludeFromRecents="true"
             android:exported="false"
-            android:theme="@style/Theme.ZERO.WidgetTrigger" />
+            android:theme="@style/Theme.ZERO.TransparentTrigger" />
         <activity
-            android:name=".TransparentWidgetCameraActivity"
+            android:name=".TransparentBotCameraActivity"
             android:excludeFromRecents="true"
             android:exported="false"
-            android:theme="@style/Theme.ZERO.WidgetTrigger" />
-        <receiver
-            android:name=".ZeroAssistantWidget"
-            android:exported="true"
-            android:label="ZERO Assistant">
-            <intent-filter>
-                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-            </intent-filter>
-            <meta-data
-                android:name="android.appwidget.provider"
-                android:resource="@xml/zero_widget_info" />
-        </receiver>
-        <receiver
-            android:name=".WidgetActionReceiver"
-            android:exported="false" />
+            android:theme="@style/Theme.ZERO.TransparentTrigger" />
         <service
             android:name=".data.WakeWordService"
             android:exported="false"

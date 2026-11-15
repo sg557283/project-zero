@@ -9,6 +9,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -21,7 +23,6 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.zero.assistant.MainActivity
 import com.zero.assistant.R
-import com.zero.assistant.ZeroAssistantWidget
 import com.zero.assistant.core.PlannerReminder
 import com.zero.assistant.core.ReminderRepository
 import com.zero.assistant.core.ReminderSchedule
@@ -39,18 +40,26 @@ class ReminderScheduler(context: Context, private val repository: ReminderReposi
         alarmManager?.cancel(alarmIntent(reminder.id))
         val triggerAt = ReminderSchedule.nextTriggerEpochMillis(reminder, nowMillis, ZoneId.systemDefault())
         if (triggerAt == null) {
-            ZeroAssistantWidget.refresh(appContext)
             return
         }
         val delay = (triggerAt - nowMillis).coerceAtLeast(0)
-        if (alarmManager != null && canScheduleExactAlarms()) {
+        if (alarmManager != null) {
             try {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAt,
-                    alarmIntent(reminder.id),
-                )
-                ZeroAssistantWidget.refresh(appContext)
+                if (canScheduleExactAlarms()) {
+                    val showIntent = PendingIntent.getActivity(
+                        appContext,
+                        reminder.id.hashCode(),
+                        Intent(appContext, MainActivity::class.java),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                    alarmManager.setAlarmClock(
+                        AlarmManager.AlarmClockInfo(triggerAt, showIntent),
+                        alarmIntent(reminder.id),
+                    )
+                } else {
+                    android.util.Log.w("ZERO-Reminder", "Exact alarms are unavailable; scheduling an allow-while-idle reminder instead.")
+                    alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, alarmIntent(reminder.id))
+                }
                 return
             } catch (failure: SecurityException) {
                 android.util.Log.w("ZERO-Reminder", "Exact-alarm access changed; using WorkManager fallback.", failure)
@@ -62,7 +71,6 @@ class ReminderScheduler(context: Context, private val repository: ReminderReposi
             .addTag(uniqueName)
             .build()
         workManager.enqueueUniqueWork(uniqueName, androidx.work.ExistingWorkPolicy.REPLACE, request)
-        ZeroAssistantWidget.refresh(appContext)
     }
 
     fun rescheduleAll(nowMillis: Long = System.currentTimeMillis()) {
@@ -72,7 +80,6 @@ class ReminderScheduler(context: Context, private val repository: ReminderReposi
     fun cancel(reminderId: String) {
         workManager.cancelUniqueWork(uniqueName(reminderId))
         alarmManager?.cancel(alarmIntent(reminderId))
-        ZeroAssistantWidget.refresh(appContext)
     }
 
     private fun canScheduleExactAlarms(): Boolean =
@@ -105,7 +112,7 @@ class ReminderNotificationWorker(context: Context, parameters: WorkerParameters)
 
     companion object {
         const val REMINDER_ID_KEY = "reminder_id"
-        const val CHANNEL_ID = "zero_reminders"
+        const val CHANNEL_ID = "zero_reminders_alarm_v2"
     }
 }
 
@@ -113,16 +120,28 @@ private object ReminderNotificationPublisher {
     fun post(context: Context, reminder: PlannerReminder) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) return
+        ) {
+            android.util.Log.w("ZERO-Reminder", "Reminder fired but notification permission is denied.")
+            return
+        }
         if (Build.VERSION.SDK_INT >= 26) {
             context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
                 NotificationChannel(
                     ReminderNotificationWorker.CHANNEL_ID,
-                    "ZERO · Local reminders",
+                    "ZERO · Reminder alarms",
                     NotificationManager.IMPORTANCE_HIGH,
                 ).apply {
-                    description = "Time-sensitive reminders scheduled on this device"
+                    description = "Audible, time-sensitive reminders scheduled on this device"
                     enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 400, 250, 600)
+                    setSound(
+                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build(),
+                    )
                 },
             )
         }
@@ -146,9 +165,14 @@ private object ReminderNotificationPublisher {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE)
+            .setVibrate(longArrayOf(0, 400, 250, 600))
+            .setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+            )
             .build()
         NotificationManagerCompat.from(context).notify(reminder.id.hashCode(), notification)
-        ZeroAssistantWidget.refresh(context)
     }
 }
 

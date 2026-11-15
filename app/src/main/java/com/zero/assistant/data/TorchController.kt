@@ -1,6 +1,5 @@
 package com.zero.assistant.data
 
-import com.zero.assistant.ZeroAssistantWidget
 import android.content.Context
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
@@ -18,13 +17,11 @@ object TorchController {
             states[cameraId] = enabled
             handler.post {
                 callbacks.forEach { it(enabled) }
-                callbackRegisteredContext?.let(ZeroAssistantWidget::refresh)
             }
         }
 
         override fun onTorchModeUnavailable(cameraId: String) {
             states.remove(cameraId)
-            handler.post { callbackRegisteredContext?.let(ZeroAssistantWidget::refresh) }
         }
     }
 
@@ -49,7 +46,6 @@ object TorchController {
         camera.setTorchMode(id, target)
         states[id] = target
         handler.post { callbacks.forEach { it(target) } }
-        ZeroAssistantWidget.refresh(context)
         target
     }
 
@@ -59,7 +55,6 @@ object TorchController {
         camera.setTorchMode(id, enabled)
         states[id] = enabled
         handler.post { callbacks.forEach { it(enabled) } }
-        ZeroAssistantWidget.refresh(context)
         enabled
     }
 

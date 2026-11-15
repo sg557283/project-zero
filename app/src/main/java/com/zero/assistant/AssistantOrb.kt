@@ -7,6 +7,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -133,6 +135,43 @@ internal fun AssistantOrb(
     }
 
     Box(orbModifier) {
+        Canvas(Modifier.fillMaxSize()) {
+            val center = androidx.compose.ui.geometry.Offset(this.size.width / 2f, this.size.height / 2f)
+            val radius = this.size.minDimension * 0.34f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    listOf(Color(0xFF18D8F3).copy(alpha = 0.34f), Color(0xFF7C4DFF).copy(alpha = 0.18f), Color.Transparent),
+                    center = center,
+                    radius = radius * 1.8f,
+                ),
+                radius = radius * 1.8f,
+                center = center,
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    listOf(Color(0xFF6CEAFF), Color(0xFF367DCE), Color(0xFF442C86), Color(0xFF111827)),
+                    center = center - androidx.compose.ui.geometry.Offset(radius * 0.3f, radius * 0.36f),
+                    radius = radius * 1.5f,
+                ),
+                radius = radius,
+                center = center,
+            )
+            drawCircle(
+                color = Color(0xFF69E9FF).copy(alpha = 0.76f),
+                radius = radius * 1.08f,
+                center = center,
+                style = Stroke(width = radius * 0.025f),
+            )
+            drawCircle(
+                brush = Brush.radialGradient(
+                    listOf(Color.White.copy(alpha = 0.42f), Color.White.copy(alpha = 0.06f), Color.Transparent),
+                    center = center - androidx.compose.ui.geometry.Offset(radius * 0.34f, radius * 0.42f),
+                    radius = radius * 0.65f,
+                ),
+                radius = radius * 0.65f,
+                center = center - androidx.compose.ui.geometry.Offset(radius * 0.34f, radius * 0.42f),
+            )
+        }
         AndroidView(
             factory = { context ->
                 OrganicOrbView(context).also(orbView::set)

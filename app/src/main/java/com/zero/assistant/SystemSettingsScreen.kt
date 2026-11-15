@@ -1,7 +1,5 @@
 package com.zero.assistant
 
-import android.appwidget.AppWidgetManager
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
@@ -37,8 +35,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,7 +57,7 @@ import com.zero.assistant.core.SpeechLanguage
 import com.zero.assistant.core.SpeechOutputStatus
 import com.zero.assistant.core.WakePhrase
 import com.zero.assistant.core.WakePhraseConfiguration
-import com.zero.assistant.core.AiProviderContract
+import com.zero.assistant.data.AiProviderConfiguration
 import com.zero.assistant.data.AiProviderSettings
 import com.zero.assistant.data.HardwareActivationSettings
 import com.zero.assistant.data.AssistantActionSettings
@@ -71,6 +69,175 @@ import java.util.Date
 import java.util.Locale
 
 internal enum class SettingsSection { Hub, VoiceAudio, WakePhrases, ToolsVault, HardwareEdge, FloatingBot, OnlineSystem }
+
+@Composable
+internal fun MultiApiProviderSettings(
+    settings: AiProviderSettings,
+    initialConfiguration: AiProviderConfiguration,
+    onConfigurationChanged: (AiProviderConfiguration) -> Unit,
+) {
+    var configuration by remember(settings) { mutableStateOf(initialConfiguration) }
+    var selectedId by remember(settings) { mutableStateOf(configuration.selectedProfileId) }
+    var profileName by remember(settings) {
+        mutableStateOf(configuration.profiles.firstOrNull { it.id == selectedId }?.name.orEmpty())
+    }
+    var endpoint by remember(settings) { mutableStateOf(configuration.endpoint) }
+    var model by remember(settings) { mutableStateOf(configuration.model) }
+    var apiKeyDraft by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf<String?>(null) }
+    var profileMenuExpanded by remember { mutableStateOf(false) }
+
+    fun refreshConfiguration() {
+        configuration = settings.configuration()
+        selectedId = configuration.selectedProfileId
+        val selected = configuration.profiles.firstOrNull { it.id == selectedId }
+        profileName = selected?.name.orEmpty()
+        endpoint = selected?.endpoint.orEmpty()
+        model = selected?.model.orEmpty()
+        apiKeyDraft = ""
+        onConfigurationChanged(configuration)
+    }
+
+    Text("Multiple OpenAI-compatible text API profiles", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+    Text(
+        "Supported local commands stay offline. ZERO uses the selected provider only for unsupported questions, after you confirm sending text. Image and web-search APIs are not configured here.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box {
+            OutlinedButton(
+                onClick = { profileMenuExpanded = true },
+                enabled = configuration.profiles.isNotEmpty(),
+            ) {
+                Text(
+                    configuration.profiles.firstOrNull { it.id == selectedId }?.name ?: "Select API profile",
+                    maxLines = 1,
+                )
+            }
+            DropdownMenu(
+                expanded = profileMenuExpanded,
+                onDismissRequest = { profileMenuExpanded = false },
+            ) {
+                configuration.profiles.forEach { profile ->
+                    DropdownMenuItem(
+                        text = { Text(profile.name) },
+                        onClick = {
+                            settings.selectProfile(profile.id)
+                                .onSuccess {
+                                    refreshConfiguration()
+                                    message = null
+                                }
+                                .onFailure { message = it.message ?: "API profile could not be selected." }
+                            profileMenuExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+        TextButton(
+            onClick = {
+                selectedId = null
+                profileName = "API ${configuration.profiles.size + 1}"
+                endpoint = ""
+                model = ""
+                apiKeyDraft = ""
+                message = null
+            },
+            enabled = configuration.profiles.size < AiProviderSettings.MAX_PROFILES,
+        ) { Text("Add API") }
+        TextButton(
+            onClick = {
+                val id = selectedId
+                if (id != null) {
+                    settings.deleteProfile(id)
+                        .onSuccess {
+                            refreshConfiguration()
+                            message = "API profile removed from this device."
+                        }
+                        .onFailure { message = it.message ?: "API profile could not be removed." }
+                }
+            },
+            enabled = selectedId != null,
+        ) { Text("Delete") }
+    }
+    OutlinedTextField(
+        value = profileName,
+        onValueChange = { profileName = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Profile name") },
+        singleLine = true,
+    )
+    SettingsToggle(
+        "Enable Online AI (BYOK)",
+        if (selectedId == null) {
+            "Save this API profile before enabling online AI."
+        } else if (configuration.hasApiKey) {
+            "Online answers are sent only after confirmation."
+        } else {
+            "Save an API key before enabling. Local commands remain available offline."
+        },
+        selectedId != null && configuration.enabled,
+        onCheckedChange = { enabled ->
+            settings.saveConfiguration(endpoint, model, enabled)
+                .onSuccess {
+                    refreshConfiguration()
+                    message = null
+                }
+                .onFailure { message = it.message ?: "Online AI settings could not be saved." }
+        },
+        enabled = selectedId != null,
+    )
+    OutlinedTextField(
+        value = endpoint,
+        onValueChange = { endpoint = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("HTTPS Chat Completions endpoint", maxLines = 1, softWrap = false) },
+        shape = RoundedCornerShape(18.dp),
+        singleLine = true,
+    )
+    OutlinedTextField(
+        value = model,
+        onValueChange = { model = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text("Provider model identifier", maxLines = 1, softWrap = false) },
+        shape = RoundedCornerShape(18.dp),
+        singleLine = true,
+    )
+    OutlinedTextField(
+        value = apiKeyDraft,
+        onValueChange = { apiKeyDraft = it },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(if (configuration.hasApiKey && selectedId != null) "Replace API key" else "API key") },
+        visualTransformation = PasswordVisualTransformation(),
+        shape = RoundedCornerShape(18.dp),
+        singleLine = true,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            settings.saveProfile(selectedId, profileName, endpoint, model, apiKeyDraft)
+                .onSuccess {
+                    refreshConfiguration()
+                    message = "Profile saved. Each online question still asks before sending."
+                }
+                .onFailure { message = it.message ?: "API profile could not be saved." }
+        }) { Text("Save API profile") }
+        TextButton(
+            onClick = {
+                settings.clearApiKey()
+                refreshConfiguration()
+                message = "Saved API key removed from this device."
+            },
+            enabled = selectedId != null && configuration.hasApiKey,
+        ) { Text("Clear key") }
+    }
+    Text(
+        "API keys are encrypted with Android Keystore. ZERO sends text only after confirmation; microphone audio, reminders, notes, and history are not sent.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.bodySmall,
+    )
+    message?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+}
 
 @Composable
 internal fun CapsuleSettingsScreen(
@@ -123,16 +290,7 @@ internal fun CapsuleSettingsScreen(
     var phraseEditorError by remember { mutableStateOf<String?>(null) }
     var vaultMenuExpanded by remember { mutableStateOf(false) }
     var aiConfiguration by remember { mutableStateOf(aiProviderSettings.configuration()) }
-    var aiEndpoint by remember { mutableStateOf(aiConfiguration.endpoint) }
-    var aiModel by remember { mutableStateOf(aiConfiguration.model) }
-    var apiKeyDraft by remember { mutableStateOf("") }
-    var aiSettingsMessage by remember { mutableStateOf<String?>(null) }
     var systemActionError by remember { mutableStateOf<String?>(null) }
-    var widgetPinInstructions by remember { mutableStateOf(false) }
-    var widgetActionMenu by remember { mutableStateOf<Int?>(null) }
-    val widgetActions = remember(context) {
-        mutableStateListOf<WidgetQuickAction>().apply { addAll(WidgetActionSettings.actions(context)) }
-    }
     var overlayPermissionGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var floatingBotVolumeEnabled by remember { mutableStateOf(FloatingBotSettings.volumeToggleEnabled(context)) }
     var bubbleAddMenuExpanded by remember { mutableStateOf(false) }
@@ -167,59 +325,6 @@ internal fun CapsuleSettingsScreen(
                 borderColor = Color(0xFFEF4444),
                 onClick = { onNavigate(Page.Emergency) },
             )
-            SettingsPanel {
-                Text("Home Screen Widget", fontWeight = FontWeight.Bold)
-                Text(
-                    "Pin ZERO for one-tap voice commands and customizable shortcuts.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Button(onClick = {
-                    val manager = AppWidgetManager.getInstance(context)
-                    val requested = runCatching {
-                        manager.isRequestPinAppWidgetSupported &&
-                            manager.requestPinAppWidget(
-                                ComponentName(context, ZeroAssistantWidget::class.java),
-                                null,
-                                null,
-                            )
-                    }.getOrElse {
-                        systemActionError = it.message ?: "The launcher could not pin the widget."
-                        false
-                    }
-                    if (!requested) widgetPinInstructions = true
-                }) {
-                    Text("Add Home Screen Widget")
-                }
-                widgetActions.forEachIndexed { slot, selectedAction ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Quick action ${slot + 1}", modifier = Modifier.weight(1f), fontSize = 13.sp)
-                        Box {
-                            OutlinedButton(onClick = { widgetActionMenu = slot }) {
-                                Text(selectedAction.label, maxLines = 1)
-                            }
-                            DropdownMenu(
-                                expanded = widgetActionMenu == slot,
-                                onDismissRequest = { widgetActionMenu = null },
-                            ) {
-                                WidgetQuickAction.entries.forEach { action ->
-                                    DropdownMenuItem(
-                                        text = { Text(action.label) },
-                                        onClick = {
-                                            WidgetActionSettings.setAction(context, slot, action)
-                                            widgetActions[slot] = action
-                                            widgetActionMenu = null
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                systemActionError?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
             SettingsFeatureCard(
                 title = "On-device Speech Recognition",
                 summary = "Android offline recognizer when installed · Android 12+",
@@ -271,7 +376,7 @@ internal fun CapsuleSettingsScreen(
             )
             SettingsPanel {
                 Text("About ZERO-Assist", fontWeight = FontWeight.Bold)
-                Text("Version ${BuildConfig.VERSION_NAME} · Made by @Shree", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Version ${BuildConfig.VERSION_NAME} · Made By Love❤️ @Shree", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
             Text(
@@ -483,7 +588,7 @@ internal fun CapsuleSettingsScreen(
                     }
                     SettingsFeatureCard("Daily Planner & Notes", "Reminders, tasks and private notes", "PLANNER", onClick = { onNavigate(Page.Planner) })
                     SettingsFeatureCard("Notes", "Browse and manage saved notes", "OPEN", onClick = { onNavigate(Page.Notes) })
-                    SettingsFeatureCard("Knowledge Scanner", "Scan text into local notes", "OPEN", onClick = { onNavigate(Page.Scanner) })
+                    SettingsFeatureCard("Offline OCR", "Scan text into local notes without a network API", "OPEN", onClick = { onNavigate(Page.Scanner) })
                     SettingsFeatureCard("My Shortcuts", "Create and launch saved commands", "OPEN", onClick = { onNavigate(Page.MyShortcuts) })
                     SettingsFeatureCard("Local Utilities & Battery Alerts", "On-device search and power notifications", "OPEN", onClick = { onNavigate(Page.LocalUtilities) })
                     SettingsFeatureCard("Battery Alerts", "Configure low and high battery notices", "OPEN", onClick = { onNavigate(Page.BatteryAlerts) })
@@ -711,70 +816,11 @@ internal fun CapsuleSettingsScreen(
                     }
                 }
                 SettingsSection.OnlineSystem -> {
-                    SettingsToggle(
-                        "Enable Online AI (BYOK)",
-                        "Sends only text after confirmation; microphone audio is never sent.",
-                        aiConfiguration.enabled,
-                        onCheckedChange = { enabled ->
-                            aiProviderSettings.saveConfiguration(aiEndpoint, aiModel, enabled)
-                                .onSuccess { aiConfiguration = aiProviderSettings.configuration(); aiSettingsMessage = null }
-                                .onFailure { aiSettingsMessage = it.message ?: "AI settings could not be saved." }
-                        },
+                    MultiApiProviderSettings(
+                        settings = aiProviderSettings,
+                        initialConfiguration = aiConfiguration,
+                        onConfigurationChanged = { aiConfiguration = it },
                     )
-                    OutlinedTextField(
-                        value = aiEndpoint,
-                        onValueChange = { aiEndpoint = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("HTTPS Endpoint", maxLines = 1, softWrap = false) },
-                        shape = RoundedCornerShape(18.dp),
-                        singleLine = true,
-                    )
-                    OutlinedTextField(
-                        value = aiModel,
-                        onValueChange = { aiModel = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("Model Identifier", maxLines = 1, softWrap = false) },
-                        shape = RoundedCornerShape(18.dp),
-                        singleLine = true,
-                    )
-                    OutlinedTextField(
-                        value = apiKeyDraft,
-                        onValueChange = { apiKeyDraft = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("API Key (Keystore Encrypted)", maxLines = 1, softWrap = false) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        shape = RoundedCornerShape(18.dp),
-                        singleLine = true,
-                    )
-                    ActionPillRow(
-                        listOf(
-                            Triple("Save", false, {
-                                aiProviderSettings.saveConfiguration(aiEndpoint, aiModel, aiConfiguration.enabled)
-                                    .onSuccess {
-                                        if (apiKeyDraft.isBlank() || aiProviderSettings.saveApiKey(apiKeyDraft)) {
-                                            apiKeyDraft = ""
-                                            aiConfiguration = aiProviderSettings.configuration()
-                                            aiSettingsMessage = "Settings saved. Each online question still asks before sending."
-                                        } else aiSettingsMessage = "The API key could not be encrypted by Android Keystore."
-                                    }
-                                    .onFailure { aiSettingsMessage = it.message ?: "AI settings could not be saved." }
-                                Unit
-                            }),
-                            Triple("Clear", false, {
-                                aiProviderSettings.clearApiKey()
-                                aiConfiguration = aiProviderSettings.configuration()
-                                aiSettingsMessage = "Saved API key removed from this device."
-                            }),
-                        ),
-                    )
-                    aiSettingsMessage?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    if (aiConfiguration.endpoint.isNotBlank()) {
-                        Text(
-                            if (AiProviderContract.validHttpsEndpoint(aiEndpoint)) "Endpoint: HTTPS verified" else "Endpoint must use HTTPS.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
                     SettingsFeatureCard("Self-Diagnostics", "Check local models and device services", "OPEN", onClick = { onNavigate(Page.Diagnostics) })
                     SettingsFeatureCard("Privacy Dashboard", "Review permissions and on-device data", "OPEN", onClick = { onNavigate(Page.Dashboard) })
                     ActionPillRow(
@@ -786,7 +832,7 @@ internal fun CapsuleSettingsScreen(
                     )
                     SettingsPanel {
                         Text("About ZERO-Assist", fontWeight = FontWeight.Bold)
-                        Text("Version 17.07.2007 · Made by @Shree", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Version ${BuildConfig.VERSION_NAME} · Made By Love❤️ @Shree", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -815,18 +861,6 @@ internal fun CapsuleSettingsScreen(
                 }) { Text("Save", maxLines = 1, softWrap = false) }
             },
             dismissButton = { TextButton(onClick = { phraseEditorVisible = false }) { Text("Cancel", maxLines = 1, softWrap = false) } },
-        )
-    }
-    if (widgetPinInstructions) {
-        AlertDialog(
-            onDismissRequest = { widgetPinInstructions = false },
-            title = { Text("Add ZERO to your home screen") },
-            text = {
-                Text("This launcher does not support one-tap pin requests. Long-press an empty area of the home screen, choose Widgets, find ZERO Assistant, then drag the widget onto the home screen.")
-            },
-            confirmButton = {
-                TextButton(onClick = { widgetPinInstructions = false }) { Text("Got it") }
-            },
         )
     }
 }
