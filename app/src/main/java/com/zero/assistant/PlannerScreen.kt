@@ -4,7 +4,10 @@ import android.app.AlarmManager
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.OpenableColumns
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,8 +18,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -41,6 +46,8 @@ import com.zero.assistant.core.ReminderRepeat
 import com.zero.assistant.core.ReminderRepository
 import com.zero.assistant.core.ReminderSchedule
 import com.zero.assistant.data.ReminderScheduler
+import com.zero.assistant.data.ReminderSoundPreset
+import com.zero.assistant.data.ReminderSoundSettings
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -57,7 +64,10 @@ internal fun PlannerScreen(
     onCreateFromVoice: ((String) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
+    val soundSettings = remember(context) { ReminderSoundSettings(context) }
     var reminders by remember { mutableStateOf(repository.all()) }
+    var reminderSound by remember { mutableStateOf(soundSettings.selection()) }
+    var customSoundName by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<PlannerReminder?>(null) }
     var title by remember(initialTitle) { mutableStateOf(initialTitle.orEmpty()) }
     var date by remember { mutableStateOf(LocalDateTime.now().plusHours(1).format(DateTimeFormatter.ISO_LOCAL_DATE)) }
@@ -65,6 +75,27 @@ internal fun PlannerScreen(
     var repeat by remember { mutableStateOf(ReminderRepeat.Never) }
     var pendingDelete by remember { mutableStateOf<PlannerReminder?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val chooseReminderSound = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            soundSettings.selectCustomSound(uri)
+                .onSuccess {
+                    reminderSound = soundSettings.selection()
+                    customSoundName = displayNameForUri(context, uri) ?: "Custom audio selected"
+                    error = null
+                }
+                .onFailure { error = it.message ?: "Custom reminder sound could not be saved." }
+        }
+    }
+
+    fun selectReminderSound(preset: ReminderSoundPreset) {
+        soundSettings.selectPreset(preset)
+            .onSuccess {
+                reminderSound = soundSettings.selection()
+                customSoundName = ""
+                error = null
+            }
+            .onFailure { error = it.message ?: "Reminder sound could not be changed." }
+    }
 
     fun resetForm() {
         editing = null
@@ -108,7 +139,14 @@ internal fun PlannerScreen(
                 Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Notifications are off", fontWeight = FontWeight.SemiBold)
                     Text("Reminders stay saved, but Android won't show them until notification permission is granted.")
-                    Button(onClick = onRequestNotifications) { Text("Enable notifications") }
+                    Button(
+                        onClick = onRequestNotifications,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+                    ) { Text("Enable notifications") }
                 }
             }
         }
@@ -125,9 +163,37 @@ internal fun PlannerScreen(
                         FilterChip(selected = repeat == option, onClick = { repeat = option }, label = { Text(option.name) })
                     }
                 }
+                Text("Reminder notification sound · applies to all reminders", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ReminderSoundPreset.entries
+                        .filter { it != ReminderSoundPreset.Custom }
+                        .forEach { preset ->
+                            FilterChip(
+                                selected = reminderSound.preset == preset,
+                                onClick = { selectReminderSound(preset) },
+                                label = { Text(preset.label) },
+                            )
+                        }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { chooseReminderSound.launch(arrayOf("audio/*")) }) {
+                        Text(if (reminderSound.preset == ReminderSoundPreset.Custom) customSoundName.ifBlank { "Custom audio selected" } else "Choose custom audio")
+                    }
+                    if (reminderSound.preset == ReminderSoundPreset.Custom) {
+                        TextButton(onClick = { selectReminderSound(ReminderSoundPreset.Alarm) }) { Text("Remove") }
+                    }
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = ::persistReminder, enabled = title.isNotBlank()) { Text(if (editing == null) "Save reminder" else "Update") }
+                    Button(
+                        onClick = ::persistReminder,
+                        enabled = title.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+                    ) { Text(if (editing == null) "Save reminder" else "Update") }
                     if (editing != null) TextButton(onClick = ::resetForm) { Text("Cancel edit") }
                     TextButton(onClick = { onCreateFromVoice { transcript -> title = transcript } }) { Text("Fill from voice") }
                 }
@@ -216,6 +282,14 @@ internal fun PlannerScreen(
         )
     }
 }
+
+private fun displayNameForUri(context: android.content.Context, uri: Uri): String? = runCatching {
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (column < 0) null else cursor.getString(column)
+    }
+}.getOrNull()
 
 @Composable
 private fun ReminderRow(

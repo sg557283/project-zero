@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -214,14 +215,21 @@ internal fun MultiApiProviderSettings(
         singleLine = true,
     )
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = {
-            settings.saveProfile(selectedId, profileName, endpoint, model, apiKeyDraft)
-                .onSuccess {
-                    refreshConfiguration()
-                    message = "Profile saved. Each online question still asks before sending."
-                }
-                .onFailure { message = it.message ?: "API profile could not be saved." }
-        }) { Text("Save API profile") }
+        Button(
+            onClick = {
+                settings.saveProfile(selectedId, profileName, endpoint, model, apiKeyDraft)
+                    .onSuccess {
+                        refreshConfiguration()
+                        message = "Profile saved. Each online question still asks before sending."
+                    }
+                    .onFailure { message = it.message ?: "API profile could not be saved." }
+            },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+        ) { Text("Save API profile") }
         TextButton(
             onClick = {
                 settings.clearApiKey()
@@ -348,7 +356,11 @@ internal fun CapsuleSettingsScreen(
                 "Built-in phrases and up to three custom phrases",
                 if (wakeWordEnabled) "ON" else "OFF",
                 onClick = { onSection(SettingsSection.WakePhrases) },
-                badgeColor = if (wakeWordEnabled) Color(0xFF56D9E7) else MaterialTheme.colorScheme.onSurfaceVariant,
+                badgeColor = if (wakeWordEnabled && MaterialTheme.colorScheme.background != Color.White) {
+                    Color(0xFF56D9E7)
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
             )
             SettingsFeatureCard(
                 "Tools & Security Vault",
@@ -726,13 +738,20 @@ internal fun CapsuleSettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
-                        Button(onClick = {
-                            if (overlayPermissionGranted) {
-                                FloatingBotOverlayService.show(context)
-                            } else {
-                                FloatingBotOverlayService.requestOverlayPermission(context)
-                            }
-                        }) {
+                        Button(
+                            onClick = {
+                                if (overlayPermissionGranted) {
+                                    FloatingBotOverlayService.show(context)
+                                } else {
+                                    FloatingBotOverlayService.requestOverlayPermission(context)
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surface,
+                                contentColor = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+                        ) {
                             Text(if (overlayPermissionGranted) "Preview Floating Bot" else "Grant Overlay Permission")
                         }
                     }
@@ -794,6 +813,11 @@ internal fun CapsuleSettingsScreen(
                             Button(
                                 onClick = { bubbleAddMenuExpanded = true },
                                 enabled = bubbleActions.size < BotBubbleConfigManager.MAX_BUBBLES,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    contentColor = MaterialTheme.colorScheme.onSurface,
+                                ),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
                             ) { Text("Add Bubble") }
                             DropdownMenu(
                                 expanded = bubbleAddMenuExpanded,
@@ -923,8 +947,15 @@ private fun SettingsPanel(content: @Composable ColumnScope.() -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
-        color = Color(0xFF131620),
-        border = BorderStroke(1.dp, Color(0xFF23283A)),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(
+            1.dp,
+            if (MaterialTheme.colorScheme.background == Color.White) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                Color(0xFF23283A)
+            },
+        ),
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
     }
@@ -937,19 +968,26 @@ private fun SettingsFeatureCard(
     badge: String,
     enabled: Boolean = true,
     highlight: Boolean = false,
-    borderColor: Color = if (highlight) Color(0xFF26D7E8) else Color(0xFF23283A),
+    borderColor: Color = Color.Unspecified,
     badgeColor: Color = MaterialTheme.colorScheme.primary,
     modifier: Modifier = Modifier,
     trailingAction: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
+    val isLight = MaterialTheme.colorScheme.background == Color.White
+    val effectiveBorderColor = when {
+        isLight -> MaterialTheme.colorScheme.onSurface
+        borderColor != Color.Unspecified -> borderColor
+        highlight -> Color(0xFF26D7E8)
+        else -> Color(0xFF23283A)
+    }
     Surface(
         onClick = onClick,
         enabled = enabled,
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
-        color = Color(0xFF131620),
-        border = BorderStroke(1.dp, borderColor),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, effectiveBorderColor),
     ) {
         Row(
             Modifier.padding(horizontal = 16.dp, vertical = 14.dp),

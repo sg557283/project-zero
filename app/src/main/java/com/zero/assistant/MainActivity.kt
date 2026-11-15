@@ -1457,8 +1457,15 @@ private fun HomeScreen(
             Surface(
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                 shape = RoundedCornerShape(50),
-                color = Color(0xFF131620),
-                border = BorderStroke(1.dp, Color(0xFF23283A)),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(
+                    1.dp,
+                    if (MaterialTheme.colorScheme.background == Color.White) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        Color(0xFF23283A)
+                    },
+                ),
             ) {
                 Row(
                     Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -1486,7 +1493,11 @@ private fun HomeScreen(
                         maxLines = 1,
                         softWrap = false,
                         style = MaterialTheme.typography.labelMedium,
-                        color = if (wakeWordServiceActive) Color(0xFF56D9E7) else MaterialTheme.colorScheme.onSurface,
+                        color = if (wakeWordServiceActive && MaterialTheme.colorScheme.background != Color.White) {
+                            Color(0xFF56D9E7)
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
                     )
                 }
             }
@@ -1601,6 +1612,7 @@ private fun HomeCapsuleDock(
     onMic: () -> Unit,
 ) {
     val dockShape = CradledCapsuleShape()
+    val isLight = MaterialTheme.colorScheme.background == Color.White
     Box(
         modifier
             .fillMaxWidth()
@@ -1628,10 +1640,14 @@ private fun HomeCapsuleDock(
                 .offset(y = (-24).dp)
                 .size(56.dp)
                 .background(
-                    Brush.radialGradient(listOf(Color(0xFF5AF3FF), Color(0xFF08AFC7), Color(0xFF17485B))),
+                    if (isLight) {
+                        Brush.radialGradient(listOf(Color.White, Color.White))
+                    } else {
+                        Brush.radialGradient(listOf(Color(0xFF5AF3FF), Color(0xFF08AFC7), Color(0xFF17485B)))
+                    },
                     CircleShape,
                 )
-                .border(1.dp, Color(0xFF96F6FF), CircleShape)
+                .border(1.dp, if (isLight) Color.Black else Color(0xFF96F6FF), CircleShape)
                 .clip(CircleShape)
                 .clickable(role = Role.Button, onClick = onMic)
                 .semantics {
@@ -1642,7 +1658,7 @@ private fun HomeCapsuleDock(
         ) {
             Text(
                 if (isListening) "STOP" else "MIC",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
@@ -1755,8 +1771,24 @@ private fun SettingsScreen(
         val speechEngineReady = speechOutputReady || speechOutputStatus is SpeechOutputStatus.LanguageUnavailable
         SettingSwitch("Speak responses", speechOutputStatusMessage(speechOutputStatus), speechOutput, onSpeechOutput, enabled = speechOutputReady)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { onTestSpeech(SpeechLanguage.English) }, enabled = speechEngineReady) { Text("Test English") }
-            Button(onClick = { onTestSpeech(SpeechLanguage.Hindi) }, enabled = speechEngineReady) { Text("Test Hindi") }
+            Button(
+                onClick = { onTestSpeech(SpeechLanguage.English) },
+                enabled = speechEngineReady,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+            ) { Text("Test English") }
+            Button(
+                onClick = { onTestSpeech(SpeechLanguage.Hindi) },
+                enabled = speechEngineReady,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onSurface),
+            ) { Text("Test Hindi") }
             TextButton(onClick = onStopSpeech, enabled = speechEngineReady) { Text("Stop") }
         }
         Text("Speech recognition", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)

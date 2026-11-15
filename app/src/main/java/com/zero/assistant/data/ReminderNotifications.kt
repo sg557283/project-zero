@@ -1,16 +1,12 @@
 package com.zero.assistant.data
 
 import android.Manifest
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.os.Build
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
@@ -124,27 +120,8 @@ private object ReminderNotificationPublisher {
             android.util.Log.w("ZERO-Reminder", "Reminder fired but notification permission is denied.")
             return
         }
-        if (Build.VERSION.SDK_INT >= 26) {
-            context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
-                NotificationChannel(
-                    ReminderNotificationWorker.CHANNEL_ID,
-                    "ZERO · Reminder alarms",
-                    NotificationManager.IMPORTANCE_HIGH,
-                ).apply {
-                    description = "Audible, time-sensitive reminders scheduled on this device"
-                    enableVibration(true)
-                    vibrationPattern = longArrayOf(0, 400, 250, 600)
-                    setSound(
-                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build(),
-                    )
-                },
-            )
-        }
+        val soundSettings = ReminderSoundSettings(context)
+        soundSettings.ensureNotificationChannel()
         val intent = Intent(context, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             context,
@@ -152,7 +129,7 @@ private object ReminderNotificationPublisher {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val notification = NotificationCompat.Builder(context, ReminderNotificationWorker.CHANNEL_ID)
+        val builder = NotificationCompat.Builder(context, soundSettings.channelId())
             .setSmallIcon(R.drawable.ic_stat_zero)
             .setContentTitle(reminder.title)
             .setContentText("ZERO reminder · scheduled on this device")
@@ -167,11 +144,8 @@ private object ReminderNotificationPublisher {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_VIBRATE)
             .setVibrate(longArrayOf(0, 400, 250, 600))
-            .setSound(
-                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
-            )
-            .build()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) builder.setSound(soundSettings.soundUri())
+        val notification = builder.build()
         NotificationManagerCompat.from(context).notify(reminder.id.hashCode(), notification)
     }
 }

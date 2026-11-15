@@ -1,6 +1,8 @@
 package com.zero.assistant.ui
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +20,7 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.runtime.SideEffect
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -29,8 +32,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.core.view.WindowCompat
 
 enum class ZeroThemeMode(val persistenceValue: String, val label: String) {
     System("system", "System / Default"),
@@ -74,17 +80,24 @@ fun zeroDarkColors() = darkColorScheme(
 )
 
 fun zeroLightColors() = lightColorScheme(
-    primary = Color(0xFF176E74),
+    primary = Color.Black,
     onPrimary = Color.White,
     secondary = Color.Black,
-    tertiary = Color(0xFF5864A7),
+    onSecondary = Color.White,
+    tertiary = Color.Black,
     background = Color.White,
     onBackground = Color.Black,
     surface = Color.White,
     onSurface = Color.Black,
     surfaceVariant = Color.White,
     onSurfaceVariant = Color.Black,
-    error = Color(0xFFB3261E),
+    primaryContainer = Color.White,
+    onPrimaryContainer = Color.Black,
+    secondaryContainer = Color.White,
+    onSecondaryContainer = Color.Black,
+    outline = Color.Black,
+    outlineVariant = Color.Black,
+    error = Color.Black,
 )
 
 @Composable
@@ -94,7 +107,30 @@ fun ZeroTheme(mode: ZeroThemeMode, content: @Composable () -> Unit) {
         ZeroThemeMode.Dark -> true
         ZeroThemeMode.Light -> false
     }
+    val view = LocalView.current
+    SideEffect {
+        val window = view.context.findActivity()?.window ?: return@SideEffect
+        val background = (if (useDarkTheme) Color(0xFF090A0F) else Color.White).toArgb()
+        window.decorView.setBackgroundColor(background)
+        window.statusBarColor = background
+        window.navigationBarColor = background
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !useDarkTheme
+            isAppearanceLightNavigationBars = !useDarkTheme
+        }
+    }
     MaterialTheme(colorScheme = if (useDarkTheme) zeroDarkColors() else zeroLightColors(), content = content)
+}
+
+private fun Context.findActivity(): Activity? {
+    var current: Context = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        val next = current.baseContext
+        if (next === current) break
+        current = next
+    }
+    return current as? Activity
 }
 
 @Composable

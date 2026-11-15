@@ -12,7 +12,7 @@ internal class OrganicOrbView(context: Context) : GLSurfaceView(context) {
         setEGLContextClientVersion(2)
         setEGLConfigChooser(8, 8, 8, 8, 16, 0)
         holder.setFormat(PixelFormat.TRANSLUCENT)
-        setZOrderOnTop(false)
+        setZOrderOnTop(true)
         preserveEGLContextOnPause = true
         setRenderer(organicRenderer)
         setRenderMode(RENDERMODE_CONTINUOUSLY)
