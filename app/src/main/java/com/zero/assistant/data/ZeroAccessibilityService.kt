@@ -13,11 +13,12 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import androidx.core.content.ContextCompat
-import com.zero.assistant.core.HardwareActivationDebouncer
 import com.zero.assistant.core.OnScreenAction
 import com.zero.assistant.core.OnScreenActionParser
 import com.zero.assistant.core.AssistantTrigger
 import com.zero.assistant.BotFaceMode
+import com.zero.assistant.FloatingBotOverlayService
+import com.zero.assistant.FloatingBotSettings
 import java.util.ArrayDeque
 import java.util.Locale
 
@@ -25,8 +26,9 @@ open class ZeroAccessibilityService : AccessibilityService() {
     private lateinit var edgePanel: AssistantOverlayService
     private var volumeUpPressed = false
     private var volumeDownPressed = false
+    private var volumeUpDownAt = 0L
+    private var volumeDownDownAt = 0L
     private var volumePairLatched = false
-    private var lastActivation = -2_000L
     private var pendingSensitiveText: String? = null
     private var pendingSensitivePackage: String? = null
     private var pendingSensitiveFieldId: String? = null
@@ -100,21 +102,34 @@ open class ZeroAccessibilityService : AccessibilityService() {
         val isVolumeDown = event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
         if (!isVolumeUp && !isVolumeDown) return false
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            if (isVolumeUp) volumeUpPressed = true else volumeDownPressed = true
+            if (isVolumeUp && !volumeUpPressed) {
+                volumeUpPressed = true
+                volumeUpDownAt = event.eventTime
+            } else if (isVolumeDown && !volumeDownPressed) {
+                volumeDownPressed = true
+                volumeDownDownAt = event.eventTime
+            }
             if (volumeUpPressed && volumeDownPressed && !volumePairLatched) {
-                volumePairLatched = true
-                val now = android.os.SystemClock.elapsedRealtime()
-                if (HardwareActivationDebouncer.accept(now, lastActivation)) activateVolumeTrigger(now)
+                val syncWindow = kotlin.math.abs(volumeUpDownAt - volumeDownDownAt)
+                if (syncWindow <= VOLUME_PAIR_SYNC_WINDOW_MS) {
+                    volumePairLatched = true
+                    activateVolumeTrigger()
+                }
             }
         } else if (event.action == KeyEvent.ACTION_UP) {
-            if (isVolumeUp) volumeUpPressed = false else volumeDownPressed = false
+            if (isVolumeUp) {
+                volumeUpPressed = false
+                volumeUpDownAt = 0L
+            } else {
+                volumeDownPressed = false
+                volumeDownDownAt = 0L
+            }
             if (!volumeUpPressed && !volumeDownPressed) volumePairLatched = false
         }
         return false
     }
 
-    private fun activateVolumeTrigger(now: Long) {
-        lastActivation = now
+    private fun activateVolumeTrigger() {
         if (AssistantActionSettings.testModeEnabled(this)) {
             val message = "${AssistantTrigger.VOLUME_UP_DOWN.label} detected."
             screenReaderTts?.takeIf { screenReaderReady }
@@ -125,9 +140,17 @@ open class ZeroAccessibilityService : AccessibilityService() {
                     .putExtra(ActionExecutor.EXTRA_TRIGGER_TEST_MESSAGE, message),
             )
         } else {
-            ActionExecutor.execute(this, AssistantActionSettings.actionFor(this, AssistantTrigger.VOLUME_UP_DOWN)) { message ->
-                screenReaderTts?.takeIf { screenReaderReady }
-                    ?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "zero-trigger-feedback")
+            if (FloatingBotSettings.volumeToggleEnabled(this)) {
+                if (!FloatingBotOverlayService.toggle(this) &&
+                    FloatingBotOverlayService.hasOverlayPermission(this)
+                ) {
+                    WakeWordSettings.updateAssistantPanel(this, "ZERO could not display the floating bot.", 5_000L)
+                }
+            } else {
+                ActionExecutor.execute(this, AssistantActionSettings.actionFor(this, AssistantTrigger.VOLUME_UP_DOWN)) { message ->
+                    screenReaderTts?.takeIf { screenReaderReady }
+                        ?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "zero-trigger-feedback")
+                }
             }
         }
     }
@@ -349,6 +372,8 @@ open class ZeroAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         volumeUpPressed = false
         volumeDownPressed = false
+        volumeUpDownAt = 0L
+        volumeDownDownAt = 0L
         volumePairLatched = false
     }
 
@@ -362,6 +387,7 @@ open class ZeroAccessibilityService : AccessibilityService() {
     }
 
     private companion object {
+        const val VOLUME_PAIR_SYNC_WINDOW_MS = 150L
         const val MAX_SCREEN_READING_CHARS = 600
         val SENSITIVE_MESSAGE_PACKAGES = setOf(
             "com.whatsapp",

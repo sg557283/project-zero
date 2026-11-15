@@ -11,7 +11,7 @@ class VoiceModelCatalogTest {
         val model = VoiceModelCatalog.model(VoiceModelCatalog.KOKORO_ID)
 
         assertTrue(model != null)
-        assertEquals(132_353_410L, model?.archiveSizeBytes)
+        assertEquals(147_052_523L, model?.archiveSizeBytes)
         assertEquals(VoiceModelCategory.EmotionBased, model?.category)
         assertEquals("Apache-2.0", model?.license)
         assertEquals(64, model?.sha256?.length)

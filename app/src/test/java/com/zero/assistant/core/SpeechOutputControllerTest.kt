@@ -67,7 +67,10 @@ class SpeechOutputControllerTest {
 
     @Test
     fun voiceLibraryIncludesTheOfflineActionBrainCategory() {
-        assertEquals(listOf("Simple", "Emotion-Based", "Offline AI"), VoiceLibraryCategory.entries.map { it.label })
+        assertEquals(
+            listOf("Humanoid Female", "Humanoid Male", "Multi-Speaker", "Offline AI"),
+            VoiceLibraryCategory.entries.map { it.label },
+        )
     }
 
     @Test

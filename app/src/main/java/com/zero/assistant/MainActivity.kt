@@ -18,6 +18,9 @@ import android.widget.Toast
 import android.content.IntentFilter
 import android.provider.MediaStore
 import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -54,6 +57,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.AlertDialog
@@ -138,13 +142,11 @@ import com.zero.assistant.data.BatteryStatus
 import com.zero.assistant.data.ProductivityPreferences
 import com.zero.assistant.data.PlannerPreferences
 import com.zero.assistant.data.ReminderScheduler
-import com.zero.assistant.data.SpeechModelManager
 import com.zero.assistant.data.ModelDownloadManager
+import com.zero.assistant.data.HumanoidTtsManager
 import com.zero.assistant.data.KokoroSpeechOutputEngine
 import com.zero.assistant.data.WakeWordService
 import com.zero.assistant.data.WakeWordSettings
-import com.zero.assistant.data.VoiceCaptureEffects
-import com.zero.assistant.data.VoiceAudioCapture
 import com.zero.assistant.data.AiProviderSettings
 import com.zero.assistant.data.OpenAiCompatibleProvider
 import com.zero.assistant.data.VaultManager
@@ -172,8 +174,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
-import org.json.JSONObject
-import org.vosk.Recognizer
 
 private val Forest = Color.White
 private val Mint = Color(0xFF202020)
@@ -184,16 +184,14 @@ class MainActivity : FragmentActivity() {
     private var speechOutputController: SpeechOutputController? = null
     private val speechOutputStatus = mutableStateOf<SpeechOutputStatus>(SpeechOutputStatus.Initializing)
     private val offlineTtsVoices = mutableStateOf<List<OfflineTtsVoice>>(emptyList())
-    private lateinit var speechModelManager: SpeechModelManager
     private lateinit var voiceModelManager: ModelDownloadManager
+    private lateinit var humanoidTtsManager: HumanoidTtsManager
     private lateinit var actionBrainEngine: com.zero.assistant.data.MobileActionBrainEngine
     private lateinit var batteryAlertManager: BatteryAlertManager
     private val batteryStatus = mutableStateOf(BatteryStatus(0, false))
     private val pendingVoiceCommand = mutableStateOf<String?>(null)
     private val pendingActionPage = mutableStateOf<String?>(null)
-    private var recognizer: Recognizer? = null
-    private var audioCapture: VoiceAudioCapture? = null
-    private val voiceCaptureEffects = VoiceCaptureEffects()
+    private var speechRecognizer: SpeechRecognizer? = null
     private var recognitionActive = false
     private var recognitionResult: ((String) -> Unit)? = null
     private var recognitionStateChanged: ((Boolean) -> Unit)? = null
@@ -209,9 +207,14 @@ class MainActivity : FragmentActivity() {
         }
         val initialLanguage = if (Locale.getDefault().language == "hi") SpeechLanguage.Hindi else SpeechLanguage.English
         voiceModelManager = ModelDownloadManager(this)
+        humanoidTtsManager = HumanoidTtsManager(this)
         actionBrainEngine = com.zero.assistant.data.MobileActionBrainEngine(this)
         speechOutputController = SpeechOutputController(
-            KokoroSpeechOutputEngine(AndroidTextToSpeechEngine(applicationContext), voiceModelManager),
+            KokoroSpeechOutputEngine(
+                AndroidTextToSpeechEngine(applicationContext),
+                voiceModelManager,
+                humanoidTtsManager,
+            ),
         ) { status ->
             runOnUiThread {
                 speechOutputStatus.value = status
@@ -220,20 +223,23 @@ class MainActivity : FragmentActivity() {
         }
         speechOutputController?.setLanguage(initialLanguage)
         speechOutputController?.initialize()
-        speechModelManager = SpeechModelManager(this)
-        speechModelManager.ensureBundledModel()
         batteryAlertManager = BatteryAlertManager(this)
         batteryAlertManager.synchronizeWorker()
         setContent {
             ZeroApp(
-                modelManager = speechModelManager,
                 voiceModelManager = voiceModelManager,
+                humanoidTtsManager = humanoidTtsManager,
                 actionBrainEngine = actionBrainEngine,
                 refreshTtsVoices = {
                     offlineTtsVoices.value = speechOutputController?.availableOfflineVoices().orEmpty()
                 },
                 prepareForVoiceModelRemoval = { onReady ->
                     speechOutputController?.prepareForVoiceModelRemoval {
+                        runOnUiThread { onReady() }
+                    } ?: onReady()
+                },
+                prepareForHumanoidVoiceRemoval = { voiceId, onReady ->
+                    speechOutputController?.prepareForVoiceModelRemoval(voiceId) {
                         runOnUiThread { onReady() }
                     } ?: onReady()
                 },
@@ -251,16 +257,6 @@ class MainActivity : FragmentActivity() {
                 speechOutputStatus = speechOutputStatus.value,
                 offlineTtsVoices = offlineTtsVoices.value,
                 selectTtsVoice = { voiceId -> speechOutputController?.selectVoice(voiceId) == true },
-                installTtsVoices = {
-                    val installIntent = Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA)
-                    runCatching {
-                        if (installIntent.resolveActivity(packageManager) == null) "No Android text-to-speech voice installer is available."
-                        else {
-                            startActivity(installIntent)
-                            "Opened Android's voice library. Installed offline voices will appear here when you return."
-                        }
-                    }.getOrElse { "Android's text-to-speech voice installer could not be opened." }
-                },
                 voiceCommand = pendingVoiceCommand.value,
                 onVoiceCommandConsumed = { pendingVoiceCommand.value = null },
                 requestedPage = pendingActionPage.value,
@@ -287,78 +283,61 @@ class MainActivity : FragmentActivity() {
             onResult("Microphone permission is needed for voice input. Tap the microphone again after granting it.")
             return
         }
+        if (Build.VERSION.SDK_INT < 31 || !SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) {
+            onResult("Android on-device speech recognition is unavailable. You can type your command instead.")
+            return
+        }
         recognitionActive = true
-        recognitionStateMachine.begin(speechModelManager.activeModelId.value)
+        recognitionStateMachine.begin("Android on-device")
         recognitionResult = onResult
         recognitionStateChanged = onStateChanged
         onStateChanged(true)
-        speechModelManager.loadActiveModel { modelResult ->
-            if (!recognitionActive) return@loadActiveModel
-            modelResult.fold(
-                onSuccess = { model ->
-                    try {
-                        val activeModelId = speechModelManager.activeModelId.value
-                            ?: throw IllegalStateException("No speech model is installed")
-                        val nextRecognizer = Recognizer(model, SAMPLE_RATE_HZ)
-                        recognizer = nextRecognizer
-                        val capture = VoiceAudioCapture(
-                            context = this,
-                            recognizer = nextRecognizer,
-                            sensitivity = WakeWordSettings.sensitivity(this),
-                            enableKeywordSpotter = false,
-                            onRecognition = { hypothesis -> runOnUiThread { finishWithHypothesis(hypothesis) } },
-                            onKeyword = {},
-                            onFailure = { failure ->
-                                runOnUiThread {
-                                    finishRecognition(
-                                        "Offline speech recognition failed: ${failure.message ?: "microphone error"}. You can type your command instead.",
-                                    )
-                                }
-                            },
-                        )
-                        audioCapture = capture
-                        voiceCaptureEffects.attach(capture.audioSessionId, enabled = true)
-                        recognitionStateMachine.listening(activeModelId)
-                        capture.start()
-                        runOnUiThread {
-                            capture.initializationWarnings.forEach { warning ->
-                                Toast.makeText(this, warning, Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    } catch (_: SecurityException) {
-                        finishRecognition("Microphone permission is unavailable. You can type a command instead.")
-                    } catch (failure: Exception) {
-                        finishRecognition(
-                            "Offline speech recognition couldn't start: ${failure.message ?: "audio input unavailable"}. You can type your command instead.",
-                        )
-                    } catch (_: LinkageError) {
-                        finishRecognition("Offline speech engine failed to load. Reinstall ZERO or type your command instead.")
-                    }
-                },
-                onFailure = { failure ->
+        try {
+            val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(this)
+            speechRecognizer = recognizer
+            recognitionStateMachine.listening("Android on-device")
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onResults(results: Bundle?) {
                     finishRecognition(
-                        "Offline speech model couldn't load: ${failure.message ?: "model unavailable"}. Open Speech Models in Settings or type your command.",
+                        results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                            ?.takeIf(String::isNotBlank)
+                            ?: "I didn't catch that. Please try again, or type your command.",
                     )
+                }
+
+                override fun onError(error: Int) {
+                    finishRecognition("On-device speech recognition failed (code $error). You can type your command instead.")
+                }
+
+                override fun onReadyForSpeech(params: Bundle?) = Unit
+                override fun onBeginningOfSpeech() = Unit
+                override fun onBufferReceived(buffer: ByteArray?) = Unit
+                override fun onEndOfSpeech() = Unit
+                override fun onEvent(eventType: Int, params: Bundle?) = Unit
+                override fun onPartialResults(partialResults: Bundle?) = Unit
+                override fun onRmsChanged(rmsdB: Float) = Unit
+            })
+            recognizer.startListening(
+                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
                 },
             )
+        } catch (failure: Exception) {
+            finishRecognition("On-device speech recognition couldn't start: ${failure.message ?: "recognizer unavailable"}. You can type your command.")
+        } catch (failure: LinkageError) {
+            finishRecognition("On-device speech recognizer could not load. You can type your command.")
         }
-    }
-
-    private fun finishWithHypothesis(hypothesis: String?) {
-        val text = runCatching { JSONObject(hypothesis.orEmpty()).optString("text").trim() }.getOrDefault("")
-        if (text.isNotBlank()) finishRecognition(text)
-        else finishRecognition("I didn't catch that. Please try again, or type your command.")
     }
 
     private fun finishRecognition(message: String) {
         if (!recognitionActive) return
         recognitionActive = false
-        val currentCapture = audioCapture
-        audioCapture = null
-        currentCapture?.stop()
-        voiceCaptureEffects.release()
-        recognizer?.close()
-        recognizer = null
+        val currentRecognizer = speechRecognizer
+        speechRecognizer = null
+        runCatching { currentRecognizer?.cancel() }
+        runCatching { currentRecognizer?.destroy() }
         val result = recognitionResult
         val stateChanged = recognitionStateChanged
         recognitionResult = null
@@ -378,12 +357,11 @@ class MainActivity : FragmentActivity() {
 
     override fun onDestroy() {
         finishRecognition("Voice input was stopped. Tap the microphone to try again.")
-        recognizer?.close()
         speechOutputController?.close()
         speechOutputController = null
         voiceModelManager.close()
+        humanoidTtsManager.close()
         actionBrainEngine.close()
-        speechModelManager.close()
         super.onDestroy()
     }
 
@@ -427,9 +405,6 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    private companion object {
-        const val SAMPLE_RATE_HZ = 16_000f
-    }
 }
 
 private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
@@ -476,19 +451,7 @@ private class AndroidTextToSpeechEngine(context: Context) : SpeechOutputEngine {
         }.getOrDefault(false)
     }
 
-    override fun availableOfflineVoices(): List<OfflineTtsVoice> = textToSpeech?.voices.orEmpty()
-        .filterNot { it.isNetworkConnectionRequired }
-        .map { voice ->
-            OfflineTtsVoice(
-                id = voice.name,
-                displayName = voice.name.replace('_', ' '),
-                languageTag = voice.locale.toLanguageTag(),
-                languageLabel = voice.locale.getDisplayName(voice.locale),
-                quality = voice.quality,
-            )
-        }
-        .distinctBy { it.id }
-        .sortedWith(compareBy<OfflineTtsVoice> { it.languageLabel }.thenBy { it.displayName })
+    override fun availableOfflineVoices(): List<OfflineTtsVoice> = emptyList()
 
     override fun selectVoice(voiceId: String): Boolean {
         val engine = textToSpeech ?: return false
@@ -542,11 +505,12 @@ private val chatSaver = listSaver<androidx.compose.runtime.snapshots.SnapshotSta
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 private fun ZeroApp(
-    modelManager: SpeechModelManager,
     voiceModelManager: ModelDownloadManager,
+    humanoidTtsManager: HumanoidTtsManager,
     actionBrainEngine: com.zero.assistant.data.MobileActionBrainEngine,
     refreshTtsVoices: () -> Unit,
     prepareForVoiceModelRemoval: (() -> Unit) -> Unit,
+    prepareForHumanoidVoiceRemoval: (String, () -> Unit) -> Unit,
     speak: (String) -> Unit,
     setSpeechLanguage: (SpeechLanguage) -> Unit,
     testSpeech: (SpeechLanguage) -> Unit,
@@ -559,7 +523,6 @@ private fun ZeroApp(
     speechOutputStatus: SpeechOutputStatus,
     offlineTtsVoices: List<OfflineTtsVoice>,
     selectTtsVoice: (String) -> Boolean,
-    installTtsVoices: () -> String,
     voiceCommand: String?,
     onVoiceCommandConsumed: () -> Unit,
     requestedPage: String?,
@@ -581,7 +544,6 @@ private fun ZeroApp(
     val aiRequestScope = rememberCoroutineScope()
     val noteRepository = remember { NoteRepository(productivityPreferences) }
     val shortcutRepository = remember { ShortcutRepository(productivityPreferences) }
-    val activeModelId by modelManager.activeModelId.collectAsState()
     LaunchedEffect(reminderScheduler) { reminderScheduler.rescheduleAll() }
     var page by rememberSaveable { mutableStateOf(Page.Home) }
     var backDestination by rememberSaveable { mutableStateOf(Page.Home) }
@@ -1008,7 +970,7 @@ private fun ZeroApp(
             onPageRequestConsumed()
         }
     }
-    LaunchedEffect(speechOutputStatus, selectedTtsVoiceId) {
+    LaunchedEffect(speechOutputStatus, selectedTtsVoiceId, offlineTtsVoices) {
         val selectedVoiceId = selectedTtsVoiceId
         if (speechOutputStatus is SpeechOutputStatus.Ready && selectedVoiceId != null) {
             if (offlineTtsVoices.any { it.id == selectedVoiceId } && !selectTtsVoice(selectedVoiceId)) {
@@ -1067,7 +1029,6 @@ private fun ZeroApp(
                 Page.Home -> HomeScreen(
                     Modifier.padding(padding), lines, input, { input = it }, notice,
                     recognitionState, isListening || wakeWordActive,
-                    activeModelId = activeModelId,
                     orbActivity = when {
                         speechOutputStatus == SpeechOutputStatus.Speaking -> OrbActivity.Speaking
                         isListening || wakeWordActive -> OrbActivity.Listening
@@ -1137,7 +1098,6 @@ private fun ZeroApp(
                             ttsPreferences.edit().remove("voice_id").apply()
                             setSpeechLanguage(if (it == "hi-IN") SpeechLanguage.Hindi else SpeechLanguage.English)
                         },
-                        activeModelId = activeModelId,
                         speechOutputStatus = speechOutputStatus,
                         onTestSpeech = { language ->
                             speechLanguageTag = language.tag
@@ -1183,13 +1143,14 @@ private fun ZeroApp(
                         if (!visible && page == Page.Vault) page = Page.Settings
                     },
                 )
-                Page.SpeechModels -> SpeechModelsScreen(
+                Page.SpeechModels -> VoiceLibraryScreen(
                     modifier = Modifier.padding(padding),
-                    manager = modelManager,
                     voiceModelManager = voiceModelManager,
+                    humanoidTtsManager = humanoidTtsManager,
                     actionBrainEngine = actionBrainEngine,
                     refreshTtsVoices = refreshTtsVoices,
                     prepareForVoiceModelRemoval = prepareForVoiceModelRemoval,
+                    prepareForHumanoidVoiceRemoval = prepareForHumanoidVoiceRemoval,
                     onModelRemoved = {
                         refreshTtsVoices()
                         if (selectedTtsVoiceId?.startsWith("kokoro:") == true) {
@@ -1197,7 +1158,14 @@ private fun ZeroApp(
                             ttsPreferences.edit().remove("voice_id").apply()
                         }
                     },
-                    ttsVoices = offlineTtsVoices,
+                    onHumanoidVoiceRemoved = { voiceId ->
+                        refreshTtsVoices()
+                        if (selectedTtsVoiceId == voiceId) {
+                            selectedTtsVoiceId = null
+                            ttsPreferences.edit().remove("voice_id").apply()
+                        }
+                    },
+                    onHumanoidVoiceInstalled = refreshTtsVoices,
                     selectedTtsVoiceId = selectedTtsVoiceId,
                     onSelectTtsVoice = { voiceId ->
                         if (selectTtsVoice(voiceId)) {
@@ -1213,22 +1181,17 @@ private fun ZeroApp(
                         } else {
                             selectedTtsVoiceId = voiceId
                             ttsPreferences.edit().putString("voice_id", voiceId).apply()
-                            speak(
-                                if (voice?.languageTag?.startsWith("hi", ignoreCase = true) == true) {
-                                    "नमस्ते। यह ZERO की ऑफलाइन आवाज़ का नमूना है।"
-                                } else if (voiceId == "kokoro:af_nova") {
-                                    "Hello. This is Nova, a Kokoro English voice running offline on your device."
-                                } else {
-                                    "Hello. This is a sample of ZERO's offline voice."
-                                },
-                            )
+                            val sample = if (voice?.languageTag?.startsWith("hi", ignoreCase = true) == true) {
+                                "नमस्ते। यह ${voice.displayName} की ऑफलाइन आवाज़ का नमूना है।"
+                            } else {
+                                "Hello. This is ${voice?.displayName ?: "ZERO's offline voice"}, running on your device."
+                            }
+                            speak(sample)
                         }
                     },
-                    onInstallTtsVoices = installTtsVoices,
                 )
                 Page.VoiceStudio -> VoiceStudioScreen(
                     modifier = Modifier.padding(padding),
-                    offlineVoices = offlineTtsVoices,
                     speechStatus = speechOutputStatus,
                     startListening = startListening,
                     stopListening = stopListening,
@@ -1278,8 +1241,6 @@ private fun ZeroApp(
                 }
                 Page.Dashboard -> PrivacyDashboardScreen(
                     modifier = Modifier.padding(padding),
-                    modelManager = modelManager,
-                    activeModelId = activeModelId,
                     microphoneGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
                     cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED,
                     callGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED,
@@ -1300,11 +1261,11 @@ private fun ZeroApp(
                 )
                 Page.Vault -> VaultScreen(Modifier.padding(padding), vaultManager)
                 Page.Emergency -> EmergencyScreen(Modifier.padding(padding))
-                Page.Diagnostics -> SelfDiagnosticsScreen(Modifier.padding(padding), vaultManager, activeModelId)
+                Page.Diagnostics -> SelfDiagnosticsScreen(Modifier.padding(padding), vaultManager)
                 Page.TriggerTest -> TriggerTestScreen(Modifier.padding(padding))
-                Page.Help -> TextPage(Modifier.padding(padding), "Help and troubleshooting", "Try commands like:\n\n• Open YouTube / YouTube kholo\n• Torch chalu karo / Torch band karo\n• Abhi kitne baje hain? / battery status\n• note buy milk\n• remind me to call Sam, then set its date and time in Planner\n• planner / notes\n• call followed by a phone number (ZERO asks you to confirm)\n\nTo enable background wake listening, open Settings, enable Background wake listening, and grant microphone and notification permissions. Keep the persistent ZERO notification visible; its Stop action ends microphone use. Enabled phrases are supplied to Vosk as a constrained grammar; recognition depends on the selected model's vocabulary and language.\n\nAndroid and device manufacturers may pause or stop microphone use because of battery management, privacy controls, force-stop, or reboot policy. After reboot, Android requires you to tap a notification and reopen ZERO before microphone capture resumes. Battery optimization guidance opens Android system settings. Speech transcripts and actions are handled locally; unsupported or sensitive commands may require review in ZERO.")
-                Page.Privacy -> TextPage(Modifier.padding(padding), "Privacy and permissions", "Typed commands, command execution, history, speech recognition, notes, reminders, shortcuts, and model inference run on this device. ZERO does not upload commands, audio, notes, reminders, or history; it has no account, analytics, or ads. Local records and downloaded models use app-private storage. ZERO does not retain raw audio.\n\nMicrophone capture starts after you tap Mic or explicitly enable wake listening and grant permission. When enabled, the foreground service continues wake recognition after the Home screen closes and shows a persistent notification. Vosk recognition and wake-phrase grammar matching are local. Hindi recognition is bundled; the optional English model is downloaded from the fixed HTTPS URL and checksum in the catalog. Optional online AI sends only a confirmed text query to the configured provider; microphone audio and local history are not sent.\n\nAndroid may interrupt the foreground service or defer notifications because of battery management, permission changes, force-stop, or reboot policy. After reboot, ZERO requires a user tap before microphone access resumes. Android TTS uses an installed voice that reports it does not require a network connection.")
-                Page.Terms -> TextPage(Modifier.padding(padding), "Terms of Use", "ZERO is provided as-is for personal use. Recognition is processed locally using the selected compatible Vosk model. Speech accuracy depends on language, microphone, device performance, and environment; automatic Hinglish recognition is not promised. Android TTS must have a compatible local voice installed. Optional online AI sends text to a provider only after confirmation and requires the user to configure and trust that provider; the provider's own terms and data handling apply. Reminder delivery is inexact and may be delayed or suppressed by Android power management, notification permission, or force-stop. External app launches, flashlight hardware, and calls depend on the device. ZERO confirms a target number before direct-call permission; if permission or calling is unavailable, it opens the dialer for review.")
+                Page.Help -> TextPage(Modifier.padding(padding), "Help and troubleshooting", "Try commands like:\n\n• Open YouTube / YouTube kholo\n• Torch chalu karo / Torch band karo\n• Abhi kitne baje hain? / battery status\n• note buy milk\n• remind me to call Sam, then set its date and time in Planner\n• planner / notes\n• call followed by a phone number (ZERO asks you to confirm)\n\nTo enable background wake listening, open Settings, enable Background wake listening, and grant microphone and notification permissions. Keep the persistent ZERO notification visible; its Stop action ends microphone use. Sherpa recognizes the included English wake phrases. After a wake phrase, command transcription requires Android's on-device speech recognizer (Android 12+ with an offline recognizer installed).\n\nAndroid and device manufacturers may pause or stop microphone use because of battery management, privacy controls, force-stop, or reboot policy. After reboot, Android requires you to tap a notification and reopen ZERO before microphone capture resumes. Battery optimization guidance opens Android system settings. Speech transcripts and actions are handled locally; unsupported or sensitive commands may require review in ZERO.")
+                Page.Privacy -> TextPage(Modifier.padding(padding), "Privacy and permissions", "Typed commands, command execution, history, speech recognition, notes, reminders, shortcuts, and model inference run on this device. ZERO does not upload commands, audio, notes, reminders, or history; it has no account, analytics, or ads. Local records and downloaded models use app-private storage. ZERO does not retain raw audio.\n\nMicrophone capture starts after you tap Mic or explicitly enable wake listening and grant permission. When enabled, the foreground service continues Sherpa keyword spotting after the Home screen closes and shows a persistent notification. Command transcription uses Android's on-device recognizer when available. ZERO does not request network recognition. Optional online AI sends only a confirmed text query to the configured provider; microphone audio and local history are not sent.\n\nAndroid may interrupt the foreground service or defer notifications because of battery management, permission changes, force-stop, or reboot policy. After reboot, ZERO requires a user tap before microphone access resumes. Android TTS uses an installed voice that reports it does not require a network connection.")
+                Page.Terms -> TextPage(Modifier.padding(padding), "Terms of Use", "ZERO is provided as-is for personal use. Speech recognition uses Sherpa keyword spotting for the included English wake phrases and Android's on-device recognizer for commands when available. Speech accuracy depends on language, microphone, device performance, and installed recognizer capabilities. Android TTS must have a compatible local voice installed. Optional online AI sends text to a provider only after confirmation and requires the user to configure and trust that provider; the provider's own terms and data handling apply. Reminder delivery may be delayed or suppressed by Android power management, notification permission, or force-stop. External app launches, flashlight hardware, and calls depend on the device. ZERO confirms a target number before direct-call permission; if permission or calling is unavailable, it opens the dialer for review.")
             }
         }
         pendingCallNumber?.let { number ->
@@ -1455,7 +1416,6 @@ private fun HomeScreen(
     notice: String?,
     recognitionState: OfflineRecognitionState,
     isListening: Boolean,
-    activeModelId: String?,
     orbActivity: OrbActivity,
     reducedMotion: Boolean,
     batteryStatus: BatteryStatus,
@@ -1506,7 +1466,7 @@ private fun HomeScreen(
                     )
                     Text("  •  ", color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, softWrap = false)
                     Text(
-                        if (activeModelId == null) "Vosk Offline" else "Vosk Local",
+                        "On-device speech",
                         maxLines = 1,
                         softWrap = false,
                         style = MaterialTheme.typography.labelMedium,
@@ -1649,8 +1609,10 @@ private fun HomeCapsuleDock(
             DockIconButton("⊞", "Tools Grid", onTools)
             DockIconButton("⌨", "Keyboard or text input", onKeyboard)
             Spacer(Modifier.width(58.dp))
-            DockIconButton("◷", "Daily Planner", onPlanner)
-            DockIconButton("▣", "ZERO Vault", onVault)
+            DockIconButton("◷", "Daily Planner", onPlanner, fontSize = 26.sp)
+            IconButton(onClick = onVault, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.Default.Lock, contentDescription = "ZERO Vault", tint = MaterialTheme.colorScheme.onSurface)
+            }
         }
         Box(
             Modifier
@@ -1683,13 +1645,13 @@ private fun HomeCapsuleDock(
 }
 
 @Composable
-private fun DockIconButton(symbol: String, description: String, onClick: () -> Unit) {
+private fun DockIconButton(symbol: String, description: String, onClick: () -> Unit, fontSize: androidx.compose.ui.unit.TextUnit = 22.sp) {
     IconButton(onClick = onClick, modifier = Modifier.size(48.dp)) {
         Text(
             symbol,
             modifier = Modifier.semantics { contentDescription = description },
             color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 22.sp,
+            fontSize = fontSize,
             maxLines = 1,
             softWrap = false,
         )
@@ -1726,7 +1688,6 @@ private fun SettingsScreen(
     onSpeechOutput: (Boolean) -> Unit,
     speechLanguageTag: String,
     onSpeechLanguage: (String) -> Unit,
-    activeModelId: String?,
     speechOutputStatus: SpeechOutputStatus,
     onTestSpeech: (SpeechLanguage) -> Unit,
     onStopSpeech: () -> Unit,
@@ -1795,11 +1756,7 @@ private fun SettingsScreen(
             TextButton(onClick = onStopSpeech, enabled = speechEngineReady) { Text("Stop") }
         }
         Text("Speech recognition", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-        Text(
-            if (activeModelId != null) "Push-to-talk uses the installed Vosk model (${activeModelId}). Recognition runs on this device; typed commands always remain available."
-            else "The included Hindi model is being installed or no model is ready yet. Typed commands always remain available.",
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-        )
+        Text("Push-to-talk uses Android's on-device speech recognizer when available (Android 12+); typed commands always remain available.", color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
         TextButton(onClick = { onNavigate(Page.SpeechModels) }) { Text("Voice Library") }
         TextButton(onClick = { onNavigate(Page.VoiceStudio) }) { Text("Offline Voice Studio") }
         TextButton(onClick = { onNavigate(Page.Scanner) }) { Text("Knowledge Scanner") }
@@ -1841,7 +1798,7 @@ private fun SettingsScreen(
             FilterChip(selected = speechLanguageTag == "hi-IN", onClick = { onSpeechLanguage("hi-IN") }, label = { Text("Hindi") })
         }
         Text("Offline voice output", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-        Text("Use Voice Library to browse the offline voices installed by Android's speech engine, select one, or open its voice-data installer. ZERO only selects voices that report they do not require a network connection.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        Text("Voice Library lists model downloads only; it does not expose Android system TTS voices.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
         Text("Wake word", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
         SettingSwitch(
             "Background wake listening",
@@ -1856,10 +1813,10 @@ private fun SettingsScreen(
         )
         Text("Built-in wake phrases: Hey ZERO, OK ZERO, and Hey Shree. You can add up to three custom phrases.", style = MaterialTheme.typography.bodySmall)
         Text("Wake-word diagnostics", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
-        Text("Wake engine: ${when { wakeWordActive && activeModelId != null -> "running with $activeModelId Vosk and bundled English KWS when available"; activeModelId != null -> "$activeModelId selected; capture is not running"; else -> "unavailable until an offline STT model is ready" }}")
+        Text("Wake engine: ${if (wakeWordActive) "Sherpa offline English KWS is running" else "Sherpa offline English KWS is stopped"}")
         Text("Microphone permission: ${if (microphonePermissionGranted) "granted" else "not granted"}")
         Text("Listening service: ${if (wakeWordActive) "running" else if (wakeWordEnabled) "enabled but not running" else "stopped"}")
-        Text("Sherpa KWS detects built-in English phrases; Vosk's constrained grammar handles Hindi and custom phrases. Accuracy depends on model and language.", style = MaterialTheme.typography.bodySmall)
+        Text("Sherpa KWS detects the included English phrases only. Custom or Hindi wake phrases are not supported by this bundled KWS model.", style = MaterialTheme.typography.bodySmall)
         Text("Last detection: ${if (wakeWordLastDetection > 0) DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(wakeWordLastDetection)) else "Never"}", style = MaterialTheme.typography.bodySmall)
         wakeWordError?.let { Text("Last service error: $it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         wakeWordPhrases.forEach { phrase ->
@@ -1868,8 +1825,8 @@ private fun SettingsScreen(
                 when {
                     !phrase.enabled -> "Disabled"
                     phrase.isDefault -> "Built-in English keyword; it remains configured unless you disable it."
-                    activeModelId == null -> "Enabled; awaiting a compatible local speech model"
-                    else -> "Enabled; included in the active Vosk grammar"
+                    phrase.isDefault -> "Built-in English wake phrase"
+                    else -> "Saved phrase; not recognized by the bundled Sherpa model"
                 },
                 phrase.enabled,
                 { enabled -> onWakeWordPhrasesChanged(WakePhraseConfiguration.setEnabled(wakeWordPhrases, phrase.id, enabled)) },
@@ -1900,7 +1857,7 @@ private fun SettingsScreen(
                 onWakeWordPhrasesChanged(WakePhraseConfiguration.enableBuiltInPhrases(wakeWordPhrases))
             }) { Text("Enable built-in phrases") }
         }
-        Text("Say an enabled phrase, pause for the offline acknowledgement, then speak a command. English built-ins use Sherpa KWS; Vosk provides Hindi/custom wake fallback and command recognition. Android may stop microphone access because of force-stop, battery controls, reboot policy, or device restrictions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
+        Text("Say an enabled built-in English phrase, pause for the offline acknowledgement, then speak a command. On-device command recognition depends on an installed Android recognizer. Android may stop microphone access because of force-stop, battery controls, reboot policy, or device restrictions.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f))
         TextButton(onClick = {
             runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
         }) { Text("Battery optimization guidance") }
@@ -2011,7 +1968,7 @@ private fun SettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(phraseDraft, { phraseDraft = it }, label = { Text("Phrase") }, singleLine = true)
                     phraseEditorError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    Text("Custom phrases use the selected Vosk model's vocabulary; English built-ins also use Sherpa keyword spotting.", style = MaterialTheme.typography.bodySmall)
+                    Text("The bundled Sherpa model recognizes only the built-in English phrases. Saved custom phrases are not active until a compatible wake model is added.", style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {

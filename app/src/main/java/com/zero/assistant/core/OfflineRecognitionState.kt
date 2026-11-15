@@ -15,7 +15,7 @@ class OfflineRecognitionStateMachine(private val onStateChanged: (OfflineRecogni
 
     fun begin(modelId: String?) {
         update(modelId?.let(OfflineRecognitionState::LoadingModel)
-            ?: OfflineRecognitionState.Failed("No speech model is installed"))
+            ?: OfflineRecognitionState.Failed("No on-device speech recognizer is available"))
     }
 
     fun listening(modelId: String) {

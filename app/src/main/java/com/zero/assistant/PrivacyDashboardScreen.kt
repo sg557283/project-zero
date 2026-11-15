@@ -16,8 +16,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,14 +24,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.zero.assistant.data.BatteryStatus
-import com.zero.assistant.data.SpeechModelManager
-import com.zero.assistant.core.ModelTransferState
 
 @Composable
 internal fun PrivacyDashboardScreen(
     modifier: Modifier,
-    modelManager: SpeechModelManager,
-    activeModelId: String?,
     microphoneGranted: Boolean,
     cameraGranted: Boolean,
     callGranted: Boolean,
@@ -49,13 +43,9 @@ internal fun PrivacyDashboardScreen(
     onNavigate: (Page) -> Unit,
 ) {
     var confirmClear by remember { mutableStateOf(false) }
-    val installedModels by modelManager.states.collectAsState()
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Privacy & system", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        DashboardRow("Speech model", activeModelId ?: "No active model")
-        val installedNames = modelManager.catalog.models.filter { installedModels[it.id] is ModelTransferState.Installed }.joinToString { it.name }
-        DashboardRow("Installed speech models", installedNames.ifBlank { "None installed" })
-        DashboardRow("Installed model storage", modelManager.installedStorageLabel())
+        DashboardRow("Speech recognition", "Android on-device recognizer when installed; Sherpa English wake model bundled")
         DashboardRow("Microphone", if (listening) "Listening now" else if (microphoneGranted) "Permission granted · idle" else "Permission not granted")
         DashboardRow("Camera", if (cameraGranted) "Permission granted" else "Not granted · requested for flashlight")
         DashboardRow("Phone calls", if (callGranted) "Permission granted" else "Not granted · requested only after call confirmation")
@@ -79,7 +69,6 @@ internal fun PrivacyDashboardScreen(
             TextButton(onClick = { onNavigate(Page.Notes) }) { Text("Notes") }
             TextButton(onClick = { onNavigate(Page.MyShortcuts) }) { Text("Shortcuts") }
         }
-        if (installedModels.isEmpty()) Text("Model inventory is loading.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     if (confirmClear) AlertDialog(
         onDismissRequest = { confirmClear = false },

@@ -62,28 +62,28 @@ object ZeroGlassTokens {
 fun zeroDarkColors() = darkColorScheme(
     primary = Color(0xFF87E4E8),
     onPrimary = Color(0xFF071719),
-    secondary = Color(0xFFBFC9D4),
+    secondary = Color(0xFFF2F4F8),
     tertiary = Color(0xFF9CA7FF),
     background = Color(0xFF090A0F),
     onBackground = Color(0xFFF3F7FA),
     surface = Color(0xFF131620),
     onSurface = Color(0xFFF3F7FA),
     surfaceVariant = Color(0xFF1A2029),
-    onSurfaceVariant = Color(0xFFB6C0CA),
+    onSurfaceVariant = Color(0xFFF2F4F8),
     error = Color(0xFFFF8D9A),
 )
 
 fun zeroLightColors() = lightColorScheme(
     primary = Color(0xFF176E74),
     onPrimary = Color.White,
-    secondary = Color(0xFF52606B),
+    secondary = Color.Black,
     tertiary = Color(0xFF5864A7),
-    background = Color(0xFFF4F7F8),
-    onBackground = Color(0xFF172026),
-    surface = Color(0xFFFDFEFE),
-    onSurface = Color(0xFF172026),
-    surfaceVariant = Color(0xFFE8EEF0),
-    onSurfaceVariant = Color(0xFF56636A),
+    background = Color.White,
+    onBackground = Color.Black,
+    surface = Color.White,
+    onSurface = Color.Black,
+    surfaceVariant = Color.White,
+    onSurfaceVariant = Color.Black,
     error = Color(0xFFB3261E),
 )
 

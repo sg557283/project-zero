@@ -5,6 +5,9 @@ import android.content.Intent
 import android.media.AudioManager
 import android.view.KeyEvent
 import com.zero.assistant.MainActivity
+import com.zero.assistant.BotBubbleAction
+import com.zero.assistant.TransparentWidgetCameraActivity
+import com.zero.assistant.TransparentVoiceTriggerActivity
 import com.zero.assistant.core.AssistantAction
 
 object ActionExecutor {
@@ -66,6 +69,28 @@ object ActionExecutor {
         }
         speak(result)
         return result
+    }
+
+    fun executeBotBubble(context: Context, bubble: BotBubbleAction): String {
+        when (bubble) {
+            BotBubbleAction.Voice -> {
+                context.startActivity(
+                    Intent(context, TransparentVoiceTriggerActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+                return "Starting an on-device voice command."
+            }
+            BotBubbleAction.Flashlight -> {
+                context.startActivity(
+                    Intent(context, TransparentWidgetCameraActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+                return "Checking flashlight access."
+            }
+            else -> Unit
+        }
+        val action = bubble.assistantAction ?: return "This floating bot action is unavailable."
+        return execute(context, action)
     }
 
     private fun dispatchMediaToggle(context: Context): String {

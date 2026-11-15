@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="zero_accessibility_service_description">ZERO uses accessibility only for user-requested screen actions after a wake phrase, such as tapping a named control or entering dictated text. Text entry in messaging apps requires confirmation. Screen actions are blocked while the device is locked.</string>
+    <string name="zero_widget_description">Voice commands, flashlight, scanner, notes and emergency shortcuts from your home screen.</string>
 </resources>

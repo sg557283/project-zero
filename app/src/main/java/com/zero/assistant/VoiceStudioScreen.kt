@@ -26,14 +26,12 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import com.zero.assistant.core.OfflineTtsVoice
 import com.zero.assistant.core.SpeechOutputStatus
 import com.zero.assistant.core.VoiceStudioCommands
 
 @Composable
 internal fun VoiceStudioScreen(
     modifier: Modifier,
-    offlineVoices: List<OfflineTtsVoice>,
     speechStatus: SpeechOutputStatus,
     startListening: ((String) -> Unit, (Boolean) -> Unit) -> Unit,
     stopListening: () -> Unit,
@@ -43,7 +41,7 @@ internal fun VoiceStudioScreen(
     val context = LocalContext.current
     var text by remember { mutableStateOf("") }
     var listening by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Recognition uses the installed offline Vosk model.") }
+    var status by remember { mutableStateOf("Recognition uses Android's on-device speech recognizer when available.") }
     val microphonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) {
             listening = false
@@ -66,7 +64,7 @@ internal fun VoiceStudioScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Offline Voice Studio", style = MaterialTheme.typography.titleLarge)
-        Text("On-device Vosk recognition and installed Android offline voices.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("On-device recognition and local speech output.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(
             value = text,
@@ -100,11 +98,6 @@ internal fun VoiceStudioScreen(
             TextButton(onClick = stopSpeech) { Text("Stop speech") }
         }
         Text("Voice controls: “full stop”, “comma”, “new line”, “delete last sentence”.", style = MaterialTheme.typography.bodySmall)
-        Text(
-            if (offlineVoices.isNotEmpty()) "${offlineVoices.size} installed Android offline voice(s)."
-            else "No installed offline Android voice is currently reported.",
-            style = MaterialTheme.typography.bodySmall,
-        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = {
                 context.startActivity(

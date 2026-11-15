@@ -19,6 +19,7 @@ object WakeWordSettings {
     }
     const val ACTION_START = "com.zero.assistant.action.START_WAKE_WORD"
     const val ACTION_ACTIVATE = "com.zero.assistant.action.ACTIVATE_ZERO"
+    const val ACTION_WIDGET_COMMAND = "com.zero.assistant.action.WIDGET_COMMAND"
     const val ACTION_STOP = "com.zero.assistant.action.STOP_WAKE_WORD"
     const val ACTION_COMMAND = "com.zero.assistant.action.REVIEW_VOICE_COMMAND"
     const val EXTRA_COMMAND = "com.zero.assistant.extra.VOICE_COMMAND"
@@ -27,7 +28,6 @@ object WakeWordSettings {
     const val ACTION_PHRASES_CHANGED = "com.zero.assistant.action.WAKE_WORD_PHRASES_CHANGED"
     const val ACTION_ASSISTANT_PANEL = "com.zero.assistant.action.ASSISTANT_PANEL"
     const val ACTION_ON_SCREEN_ACTION = "com.zero.assistant.action.ON_SCREEN_ACTION"
-    const val ACTION_SPEECH_MODEL_CHANGED = "com.zero.assistant.action.SPEECH_MODEL_CHANGED"
     const val ACTION_WAKE_SENSITIVITY_CHANGED = "com.zero.assistant.action.WAKE_SENSITIVITY_CHANGED"
     const val EXTRA_ON_SCREEN_ACTION = "com.zero.assistant.extra.ON_SCREEN_ACTION"
     const val EXTRA_PANEL_MESSAGE = "com.zero.assistant.extra.PANEL_MESSAGE"
@@ -139,6 +139,7 @@ object WakeWordSettings {
             .putString(KEY_ERROR, error)
             .apply()
         broadcastChanged(context)
+        com.zero.assistant.ZeroAssistantWidget.refresh(context)
     }
 
     fun updateAssistantPanel(
@@ -149,6 +150,10 @@ object WakeWordSettings {
         faceMode: String? = null,
         pendingText: String? = null,
     ) {
+        com.zero.assistant.FloatingBotOverlayService.updateExpression(
+            context,
+            faceMode ?: com.zero.assistant.BotFaceMode.Listening.name,
+        )
         context.sendBroadcast(
             android.content.Intent(ACTION_ASSISTANT_PANEL)
                 .setPackage(context.packageName)
@@ -165,12 +170,6 @@ object WakeWordSettings {
             android.content.Intent(ACTION_ON_SCREEN_ACTION)
                 .setPackage(context.packageName)
                 .putExtra(EXTRA_ON_SCREEN_ACTION, command),
-        )
-    }
-
-    fun notifySpeechModelChanged(context: Context) {
-        context.sendBroadcast(
-            android.content.Intent(ACTION_SPEECH_MODEL_CHANGED).setPackage(context.packageName),
         )
     }
 

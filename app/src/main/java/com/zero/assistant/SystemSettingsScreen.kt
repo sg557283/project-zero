@@ -1,5 +1,7 @@
 package com.zero.assistant
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
@@ -21,6 +23,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -32,8 +35,10 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -44,6 +49,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.zero.assistant.core.ShakeSensitivity
 import com.zero.assistant.core.AssistantAction
 import com.zero.assistant.core.AssistantTrigger
@@ -62,7 +70,7 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
 
-internal enum class SettingsSection { Hub, VoiceAudio, WakePhrases, ToolsVault, HardwareEdge, OnlineSystem }
+internal enum class SettingsSection { Hub, VoiceAudio, WakePhrases, ToolsVault, HardwareEdge, FloatingBot, OnlineSystem }
 
 @Composable
 internal fun CapsuleSettingsScreen(
@@ -75,7 +83,6 @@ internal fun CapsuleSettingsScreen(
     onThinkingCues: (Boolean) -> Unit,
     speechLanguageTag: String,
     onSpeechLanguage: (String) -> Unit,
-    activeModelId: String?,
     speechOutputStatus: SpeechOutputStatus,
     onTestSpeech: (SpeechLanguage) -> Unit,
     onStopSpeech: () -> Unit,
@@ -121,6 +128,27 @@ internal fun CapsuleSettingsScreen(
     var apiKeyDraft by remember { mutableStateOf("") }
     var aiSettingsMessage by remember { mutableStateOf<String?>(null) }
     var systemActionError by remember { mutableStateOf<String?>(null) }
+    var widgetPinInstructions by remember { mutableStateOf(false) }
+    var widgetActionMenu by remember { mutableStateOf<Int?>(null) }
+    val widgetActions = remember(context) {
+        mutableStateListOf<WidgetQuickAction>().apply { addAll(WidgetActionSettings.actions(context)) }
+    }
+    var overlayPermissionGranted by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
+    var floatingBotVolumeEnabled by remember { mutableStateOf(FloatingBotSettings.volumeToggleEnabled(context)) }
+    var bubbleAddMenuExpanded by remember { mutableStateOf(false) }
+    val bubbleActions = remember(context) {
+        mutableStateListOf<BotBubbleAction>().apply { addAll(BotBubbleConfigManager.actions(context)) }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                overlayPermissionGranted = Settings.canDrawOverlays(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val speechOutputReady =
         speechOutputStatus is SpeechOutputStatus.Ready || speechOutputStatus is SpeechOutputStatus.ReadyWithVoice
     val speechEngineReady = speechOutputReady || speechOutputStatus is SpeechOutputStatus.LanguageUnavailable
@@ -132,10 +160,70 @@ internal fun CapsuleSettingsScreen(
         if (section == SettingsSection.Hub) {
             Text("System Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             SettingsFeatureCard(
-                title = "Vosk Local Engine",
-                summary = activeModelId?.let { "$it (On-Device) • Hindi/English" }
-                    ?: "vosk-hi-small-0.22 (On-Device) • Hindi/English · Setting up",
-                badge = "OPEN",
+                "Emergency Quick Mode",
+                "Review configured emergency actions",
+                "OPEN",
+                highlight = false,
+                borderColor = Color(0xFFEF4444),
+                onClick = { onNavigate(Page.Emergency) },
+            )
+            SettingsPanel {
+                Text("Home Screen Widget", fontWeight = FontWeight.Bold)
+                Text(
+                    "Pin ZERO for one-tap voice commands and customizable shortcuts.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Button(onClick = {
+                    val manager = AppWidgetManager.getInstance(context)
+                    val requested = runCatching {
+                        manager.isRequestPinAppWidgetSupported &&
+                            manager.requestPinAppWidget(
+                                ComponentName(context, ZeroAssistantWidget::class.java),
+                                null,
+                                null,
+                            )
+                    }.getOrElse {
+                        systemActionError = it.message ?: "The launcher could not pin the widget."
+                        false
+                    }
+                    if (!requested) widgetPinInstructions = true
+                }) {
+                    Text("Add Home Screen Widget")
+                }
+                widgetActions.forEachIndexed { slot, selectedAction ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Quick action ${slot + 1}", modifier = Modifier.weight(1f), fontSize = 13.sp)
+                        Box {
+                            OutlinedButton(onClick = { widgetActionMenu = slot }) {
+                                Text(selectedAction.label, maxLines = 1)
+                            }
+                            DropdownMenu(
+                                expanded = widgetActionMenu == slot,
+                                onDismissRequest = { widgetActionMenu = null },
+                            ) {
+                                WidgetQuickAction.entries.forEach { action ->
+                                    DropdownMenuItem(
+                                        text = { Text(action.label) },
+                                        onClick = {
+                                            WidgetActionSettings.setAction(context, slot, action)
+                                            widgetActions[slot] = action
+                                            widgetActionMenu = null
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                systemActionError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            SettingsFeatureCard(
+                title = "On-device Speech Recognition",
+                summary = "Android offline recognizer when installed · Android 12+",
+                badge = "INFO",
                 highlight = true,
                 onClick = { onNavigate(Page.SpeechModels) },
             )
@@ -170,6 +258,12 @@ internal fun CapsuleSettingsScreen(
                 onClick = { onSection(SettingsSection.HardwareEdge) },
             )
             SettingsFeatureCard(
+                "Customize Floating Bot Bubbles",
+                "System-wide dotted bot, volume-key toggle and radial actions",
+                "OPEN",
+                onClick = { onSection(SettingsSection.FloatingBot) },
+            )
+            SettingsFeatureCard(
                 "Online AI & System",
                 "Optional BYOK endpoint, diagnostics, privacy and help",
                 if (aiConfiguration.enabled) "ON" else "OPEN",
@@ -186,6 +280,7 @@ internal fun CapsuleSettingsScreen(
                     SettingsSection.WakePhrases -> "Wake Word & Phrases"
                     SettingsSection.ToolsVault -> "Tools & Security Vault"
                     SettingsSection.HardwareEdge -> "Hardware & Edge Panel"
+                    SettingsSection.FloatingBot -> "Customize Floating Bot Bubbles"
                     SettingsSection.OnlineSystem -> "Online AI & System"
                     SettingsSection.Hub -> "System Settings"
                 },
@@ -221,16 +316,15 @@ internal fun CapsuleSettingsScreen(
                         enabled = speechEngineReady,
                     )
                     SettingsFeatureCard(
-                        "Vosk Local Recognition",
-                        activeModelId?.let { "$it is active on this device. Typed commands work offline too." }
-                            ?: "The local Hindi model is installing or not ready. Typed commands remain available.",
+                        "Android On-device Recognition",
+                        "Voice commands use Android's on-device recognizer when available. Typed commands always work.",
                         "MODELS",
                         onClick = { onNavigate(Page.SpeechModels) },
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         SettingsFeatureCard(
                             "Voice Library",
-                            "Browse offline Android voices",
+                            "Browse optional model downloads",
                             "OPEN",
                             onClick = { onNavigate(Page.SpeechModels) },
                             modifier = Modifier.weight(1f),
@@ -282,14 +376,14 @@ internal fun CapsuleSettingsScreen(
                     }
                     SettingsToggle(
                         "Background Wake Listening",
-                        "Uses offline English keyword spotting with the selected Vosk model as wake fallback.",
+                        "Uses bundled Sherpa offline keyword spotting for the built-in English phrases.",
                         wakeWordEnabled,
                         onWakeWordEnabled,
                     )
                     SettingsPanel {
                         Text("Wake Sensitivity", fontWeight = FontWeight.Bold)
                         Text(
-                            "AGC when supported • Normal: KWS/VAD 0.35 • Low-Voice: 0.20 + 2.8 boost. Hindi/custom use Vosk.",
+                            "Sherpa KWS sensitivity adjusts English wake-phrase detection; custom and Hindi wake phrases are not recognized.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
@@ -314,8 +408,7 @@ internal fun CapsuleSettingsScreen(
                             when {
                                 !phrase.enabled -> "Disabled"
                                 phrase.isDefault -> "Built-in phrase"
-                                activeModelId == null -> "Enabled · waiting for a local model"
-                                else -> "Enabled · included in local wake grammar"
+                                else -> "Saved phrase; bundled Sherpa recognizes only its built-in phrases"
                             },
                             phrase.enabled,
                             { enabled ->
@@ -393,14 +486,6 @@ internal fun CapsuleSettingsScreen(
                     SettingsFeatureCard("Knowledge Scanner", "Scan text into local notes", "OPEN", onClick = { onNavigate(Page.Scanner) })
                     SettingsFeatureCard("My Shortcuts", "Create and launch saved commands", "OPEN", onClick = { onNavigate(Page.MyShortcuts) })
                     SettingsFeatureCard("Local Utilities & Battery Alerts", "On-device search and power notifications", "OPEN", onClick = { onNavigate(Page.LocalUtilities) })
-                    SettingsFeatureCard(
-                        "Emergency Quick Mode",
-                        "Review configured emergency actions",
-                        "OPEN",
-                        highlight = false,
-                        borderColor = Color(0xFFEF4444),
-                        onClick = { onNavigate(Page.Emergency) },
-                    )
                     SettingsFeatureCard("Battery Alerts", "Configure low and high battery notices", "OPEN", onClick = { onNavigate(Page.BatteryAlerts) })
                 }
                 SettingsSection.HardwareEdge -> {
@@ -524,6 +609,107 @@ internal fun CapsuleSettingsScreen(
                     }
 
                 }
+                SettingsSection.FloatingBot -> {
+                    SettingsPanel {
+                        Text("System-wide Floating Bot", fontWeight = FontWeight.Bold)
+                        Text(
+                            if (overlayPermissionGranted) {
+                                "Display-over-other-apps access is granted."
+                            } else {
+                                "ZERO needs Android's display-over-other-apps access to draw above other apps."
+                            },
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Button(onClick = {
+                            if (overlayPermissionGranted) {
+                                FloatingBotOverlayService.show(context)
+                            } else {
+                                FloatingBotOverlayService.requestOverlayPermission(context)
+                            }
+                        }) {
+                            Text(if (overlayPermissionGranted) "Preview Floating Bot" else "Grant Overlay Permission")
+                        }
+                    }
+                    SettingsToggle(
+                        "Volume Up + Down toggles the bot",
+                        "When enabled, the volume chord shows or hides ZERO. Disable it to restore the configured volume-shortcut action.",
+                        floatingBotVolumeEnabled,
+                        onCheckedChange = {
+                            FloatingBotSettings.setVolumeToggleEnabled(context, it)
+                            floatingBotVolumeEnabled = it
+                        },
+                    )
+                    TextButton(onClick = { onSection(SettingsSection.HardwareEdge) }) {
+                        Text("Configure the Volume Up + Down shortcut")
+                    }
+                    SettingsPanel {
+                        Text("Radial Action Bubbles", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Hold the floating bot, drag to an action, then release. Keep up to ${BotBubbleConfigManager.MAX_BUBBLES} bubbles.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        bubbleActions.forEachIndexed { index, action ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("${index + 1}. ${action.label}", modifier = Modifier.weight(1f))
+                                TextButton(
+                                    onClick = {
+                                        val updated = bubbleActions.toMutableList().apply {
+                                            add(index - 1, removeAt(index))
+                                        }
+                                        BotBubbleConfigManager.save(context, updated)
+                                        bubbleActions.clear()
+                                        bubbleActions.addAll(updated)
+                                    },
+                                    enabled = index > 0,
+                                ) { Text("Up") }
+                                TextButton(
+                                    onClick = {
+                                        val updated = bubbleActions.toMutableList().apply {
+                                            add(index + 1, removeAt(index))
+                                        }
+                                        BotBubbleConfigManager.save(context, updated)
+                                        bubbleActions.clear()
+                                        bubbleActions.addAll(updated)
+                                    },
+                                    enabled = index < bubbleActions.lastIndex,
+                                ) { Text("Down") }
+                                TextButton(
+                                    onClick = {
+                                        val updated = bubbleActions.toMutableList().apply { removeAt(index) }
+                                        BotBubbleConfigManager.save(context, updated)
+                                        bubbleActions.clear()
+                                        bubbleActions.addAll(updated)
+                                    },
+                                ) { Text("Remove") }
+                            }
+                        }
+                        Box {
+                            Button(
+                                onClick = { bubbleAddMenuExpanded = true },
+                                enabled = bubbleActions.size < BotBubbleConfigManager.MAX_BUBBLES,
+                            ) { Text("Add Bubble") }
+                            DropdownMenu(
+                                expanded = bubbleAddMenuExpanded,
+                                onDismissRequest = { bubbleAddMenuExpanded = false },
+                            ) {
+                                BotBubbleAction.entries.filterNot(bubbleActions::contains).forEach { action ->
+                                    DropdownMenuItem(
+                                        text = { Text(action.label) },
+                                        onClick = {
+                                            val updated = bubbleActions + action
+                                            BotBubbleConfigManager.save(context, updated)
+                                            bubbleActions.clear()
+                                            bubbleActions.addAll(updated)
+                                            bubbleAddMenuExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 SettingsSection.OnlineSystem -> {
                     SettingsToggle(
                         "Enable Online AI (BYOK)",
@@ -615,7 +801,7 @@ internal fun CapsuleSettingsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(phraseDraft, { phraseDraft = it }, label = { Text("Phrase") }, singleLine = true)
                     phraseEditorError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    Text("Sherpa KWS covers built-in English phrases; custom phrases use the selected Vosk model's vocabulary.", style = MaterialTheme.typography.bodySmall)
+                    Text("Sherpa KWS covers the included English phrases. Saved custom phrases are not recognized by the bundled model.", style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {
@@ -629,6 +815,18 @@ internal fun CapsuleSettingsScreen(
                 }) { Text("Save", maxLines = 1, softWrap = false) }
             },
             dismissButton = { TextButton(onClick = { phraseEditorVisible = false }) { Text("Cancel", maxLines = 1, softWrap = false) } },
+        )
+    }
+    if (widgetPinInstructions) {
+        AlertDialog(
+            onDismissRequest = { widgetPinInstructions = false },
+            title = { Text("Add ZERO to your home screen") },
+            text = {
+                Text("This launcher does not support one-tap pin requests. Long-press an empty area of the home screen, choose Widgets, find ZERO Assistant, then drag the widget onto the home screen.")
+            },
+            confirmButton = {
+                TextButton(onClick = { widgetPinInstructions = false }) { Text("Got it") }
+            },
         )
     }
 }

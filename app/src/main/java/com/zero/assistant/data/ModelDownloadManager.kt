@@ -7,6 +7,7 @@ import android.os.StatFs
 import com.zero.assistant.core.VoiceModelCatalog
 import com.zero.assistant.core.VoiceModelSpec
 import com.zero.assistant.core.VoiceModelTransferState
+import com.zero.assistant.core.KokoroSpeakerCatalog
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig
@@ -33,10 +34,7 @@ class ModelDownloadManager(context: Context) : AutoCloseable {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val modelRoot = File(
-        appContext.getExternalFilesDir("voice_models") ?: File(appContext.filesDir, "voice_models"),
-        "kokoro",
-    )
+    private val modelRoot = File(appContext.filesDir, "tts_models/kokoro")
     private val cacheFile = File(appContext.cacheDir, "${VoiceModelCatalog.KOKORO_ID}.tar.bz2.part")
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private val lock = Object()
@@ -54,7 +52,7 @@ class ModelDownloadManager(context: Context) : AutoCloseable {
 
     fun availableVoices(): List<Pair<String, Int>> =
         if (activeModelId.value == VoiceModelCatalog.KOKORO_ID && isInstalled()) {
-            listOf("af_bella" to 2, "af_nova" to 7, "af_heart" to 3)
+            kokoroSpeakers()
         } else {
             emptyList()
         }
@@ -323,7 +321,8 @@ class ModelDownloadManager(context: Context) : AutoCloseable {
             File(directory, "tokens.txt").isFile &&
             File(directory, "espeak-ng-data").isDirectory &&
             File(directory, "lexicon-us-en.txt").isFile &&
-            File(directory, "lexicon-gb-en.txt").isFile
+            File(directory, "lexicon-gb-en.txt").isFile &&
+            File(directory, "lexicon-zh.txt").isFile
 
     private fun initialState(): VoiceModelTransferState = when {
         isInstalled() -> VoiceModelTransferState.Installed
@@ -393,10 +392,14 @@ class ModelDownloadManager(context: Context) : AutoCloseable {
         private const val READ_TIMEOUT_MS = 30_000
         private const val MAX_REDIRECTS = 5
         private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
+
+        private fun kokoroSpeakers(): List<Pair<String, Int>> = buildList {
+            KokoroSpeakerCatalog.english.forEach { add(it.name to it.speakerId) }
+        }
     }
 }
 
-class KokoroTtsSession(directory: File) : AutoCloseable {
+class KokoroTtsSession(directory: File, languageTag: String) : AutoCloseable {
     private val engine = OfflineTts(
         null,
         OfflineTtsConfig(
@@ -410,9 +413,9 @@ class KokoroTtsSession(directory: File) : AutoCloseable {
                     voices = File(directory, "voices.bin").absolutePath,
                     tokens = File(directory, "tokens.txt").absolutePath,
                     dataDir = File(directory, "espeak-ng-data").absolutePath,
-                    lexicon = listOf("lexicon-us-en.txt", "lexicon-gb-en.txt")
+                    lexicon = listOf("lexicon-us-en.txt", "lexicon-gb-en.txt", "lexicon-zh.txt")
                         .joinToString(",") { File(directory, it).absolutePath },
-                    lang = "en-us",
+                    lang = languageTag.lowercase(),
                     dictDir = File(directory, "dict").absolutePath,
                 ),
                 numThreads = 2,

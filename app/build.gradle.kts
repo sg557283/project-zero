@@ -72,7 +72,6 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
-    implementation("com.alphacephei:vosk-android:0.3.75")
     implementation(files("libs/sherpa-onnx-2.0.1.aar"))
     implementation("com.google.code.gson:gson:2.13.2")
     implementation("org.apache.commons:commons-compress:1.28.0")

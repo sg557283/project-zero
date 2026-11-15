@@ -1,0 +1,8 @@
+<resources>
+    <color name="zero_widget_background">#171922</color>
+    <color name="zero_widget_outline">#454A5A</color>
+    <color name="zero_widget_text">#FFFFFF</color>
+    <color name="zero_widget_action">#292D39</color>
+    <color name="zero_widget_accent">#69DCEB</color>
+    <color name="zero_widget_emergency">#C5A5FF</color>
+</resources>

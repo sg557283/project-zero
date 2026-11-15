@@ -1,0 +1,180 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/zero_widget_background"
+    android:gravity="center_vertical"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <LinearLayout
+        android:id="@+id/widget_compact"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="42dp"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="ZERO"
+            android:textColor="@color/zero_widget_text"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <ImageButton
+            android:id="@+id/widget_mic_compact"
+            android:layout_width="44dp"
+            android:layout_height="40dp"
+            android:layout_marginHorizontal="3dp"
+            android:background="@drawable/zero_widget_action_background"
+            android:contentDescription="Speak a command"
+            android:padding="10dp"
+            android:src="@android:drawable/ic_btn_speak_now"
+            android:tint="@color/zero_widget_accent"
+            tools:ignore="UseAppTint" />
+
+        <TextView
+            android:id="@+id/widget_action_0"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginHorizontal="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/zero_widget_action_background"
+            android:gravity="center"
+            android:maxLines="1"
+            android:paddingHorizontal="3dp"
+            android:text="Flashlight"
+            android:textColor="@color/zero_widget_text"
+            android:textSize="10sp" />
+
+        <TextView
+            android:id="@+id/widget_action_1"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_marginHorizontal="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/zero_widget_action_background"
+            android:gravity="center"
+            android:maxLines="1"
+            android:paddingHorizontal="3dp"
+            android:text="UPI Scanner"
+            android:textColor="@color/zero_widget_text"
+            android:textSize="10sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/widget_expanded"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:paddingHorizontal="4dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="48dp"
+                android:layout_height="match_parent"
+                android:gravity="center_vertical"
+                android:text="ZERO"
+                android:textColor="@color/zero_widget_text"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/widget_status"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:gravity="center_vertical"
+                android:maxLines="1"
+                android:paddingHorizontal="4dp"
+                android:text="Ready to listen"
+                android:textColor="@color/zero_widget_text"
+                android:textSize="11sp" />
+
+            <ImageButton
+                android:id="@+id/widget_mic_expanded"
+                android:layout_width="44dp"
+                android:layout_height="38dp"
+                android:background="@drawable/zero_widget_action_background"
+                android:contentDescription="Speak a command"
+                android:padding="9dp"
+                android:src="@android:drawable/ic_btn_speak_now"
+                android:tint="@color/zero_widget_accent"
+                tools:ignore="UseAppTint" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/widget_expanded_action_0"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_weight="1"
+                android:background="@drawable/zero_widget_action_background"
+                android:gravity="center"
+                android:maxLines="1"
+                android:paddingHorizontal="2dp"
+                android:text="Flashlight"
+                android:textColor="@color/zero_widget_text"
+                android:textSize="10sp" />
+
+            <TextView
+                android:id="@+id/widget_expanded_action_1"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_weight="1"
+                android:background="@drawable/zero_widget_action_background"
+                android:gravity="center"
+                android:maxLines="1"
+                android:paddingHorizontal="2dp"
+                android:text="UPI"
+                android:textColor="@color/zero_widget_text"
+                android:textSize="10sp" />
+
+            <TextView
+                android:id="@+id/widget_expanded_action_2"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_weight="1"
+                android:background="@drawable/zero_widget_action_background"
+                android:gravity="center"
+                android:maxLines="1"
+                android:paddingHorizontal="2dp"
+                android:text="Voice Note"
+                android:textColor="@color/zero_widget_text"
+                android:textSize="10sp" />
+
+            <TextView
+                android:id="@+id/widget_expanded_action_3"
+                android:layout_width="0dp"
+                android:layout_height="38dp"
+                android:layout_marginHorizontal="2dp"
+                android:layout_weight="1"
+                android:background="@drawable/zero_widget_action_background"
+                android:gravity="center"
+                android:maxLines="1"
+                android:paddingHorizontal="2dp"
+                android:text="Emergency SOS"
+                android:textColor="@color/zero_widget_emergency"
+                android:textSize="10sp" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

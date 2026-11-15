@@ -21,13 +21,6 @@ class CradledCapsuleShape(
         val centerX = size.width / 2f
         val path = Path().apply {
             moveTo(corner, 0f)
-            lineTo(centerX - radius, 0f)
-            arcTo(
-                rect = Rect(centerX - radius, -radius, centerX + radius, radius),
-                startAngleDegrees = 180f,
-                sweepAngleDegrees = 180f,
-                forceMoveTo = false,
-            )
             lineTo(size.width - corner, 0f)
             arcTo(
                 rect = Rect(size.width - 2f * corner, 0f, size.width, 2f * corner),
@@ -40,6 +33,13 @@ class CradledCapsuleShape(
                 rect = Rect(size.width - 2f * corner, size.height - 2f * corner, size.width, size.height),
                 startAngleDegrees = 0f,
                 sweepAngleDegrees = 90f,
+                forceMoveTo = false,
+            )
+            lineTo(centerX + radius, size.height)
+            arcTo(
+                rect = Rect(centerX - radius, size.height - radius, centerX + radius, size.height + radius),
+                startAngleDegrees = 0f,
+                sweepAngleDegrees = -180f,
                 forceMoveTo = false,
             )
             lineTo(corner, size.height)

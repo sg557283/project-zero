@@ -242,7 +242,7 @@ internal fun VaultScreen(modifier: Modifier, manager: VaultManager) {
         }) { Text("Restore") } }, dismissButton = { TextButton(onClick = { restoreUri = null }) { Text("Cancel") } })
     }
     permanentFile?.let { file ->
-        AlertDialog(onDismissRequest = { permanentFile = null }, title = { Text("Delete encrypted file permanently?") }, text = { Text("This removes the encrypted copy and cannot be undone.") }, confirmButton = { TextButton(onClick = { manager.permanentlyDelete(file).onSuccess { notice = "File permanently deleted."; refresh++ }.onFailure { notice = it.message }; permanentFile = null }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { permanentFile = null }) { Text("Cancel") } })
+        AlertDialog(onDismissRequest = { permanentFile = null }, title = { Text("Delete file permanently?") }, text = { Text("This removes the Vault copy and, when Android still grants access, the original imported file. Flash storage cannot guarantee forensic overwriting.") }, confirmButton = { TextButton(onClick = { manager.permanentlyDelete(file).onSuccess { notice = if (file.sourceUri != null) "Vault file and accessible source permanently deleted." else "Vault file permanently deleted."; refresh++ }.onFailure { notice = it.message }; permanentFile = null }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { permanentFile = null }) { Text("Cancel") } })
     }
 }
 

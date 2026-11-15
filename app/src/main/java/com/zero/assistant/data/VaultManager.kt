@@ -1,16 +1,19 @@
 package com.zero.assistant.data
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.provider.DocumentsContract
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.zero.assistant.core.VaultAttemptState
 import com.zero.assistant.core.VaultSecurity
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
@@ -34,6 +37,7 @@ data class VaultFile(
     val mimeType: String = "application/octet-stream",
     val folderId: String = "",
     val trashedMillis: Long = 0L,
+    val sourceUri: String? = null,
 )
 
 data class VaultFolder(val id: String, val name: String, val modifiedMillis: Long)
@@ -190,6 +194,13 @@ class VaultManager(context: Context) {
     fun import(uri: Uri, displayName: String, folderId: String = "", mimeType: String? = null): Result<VaultFile> = runCatching {
         val key = requireUnlocked()
         val id = UUID.randomUUID().toString()
+        val persistedSourceUri = runCatching {
+            appContext.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            uri.toString()
+        }.getOrNull()
         val encrypted = File(vaultDirectory, id)
         val temp = File(vaultDirectory, "$id.tmp")
         check(!encrypted.exists() && !temp.exists()) { "Vault file identifier collision." }
@@ -210,7 +221,15 @@ class VaultManager(context: Context) {
                 }
             }}
             check(temp.renameTo(encrypted)) { "The encrypted import could not be finalized." }
-            val file = VaultFile(id, displayName.take(200), plaintextBytes, System.currentTimeMillis(), mimeType ?: appContext.contentResolver.getType(uri) ?: "application/octet-stream", folderId)
+            val file = VaultFile(
+                id,
+                displayName.take(200),
+                plaintextBytes,
+                System.currentTimeMillis(),
+                mimeType ?: appContext.contentResolver.getType(uri) ?: "application/octet-stream",
+                folderId,
+                sourceUri = persistedSourceUri,
+            )
             saveManifest(files() + file)
             file
         } catch (failure: Throwable) {
@@ -253,8 +272,40 @@ class VaultManager(context: Context) {
 
     fun permanentlyDelete(file: VaultFile): Result<Unit> = runCatching {
         check(file.trashedMillis.isPresent()) { "Move the file to Trash before permanent deletion." }
+        val encrypted = File(vaultDirectory, file.id)
+        if (encrypted.exists()) {
+            overwriteBeforeDelete(encrypted)
+            check(!encrypted.exists()) { "The encrypted file could not be deleted." }
+        }
+        appContext.cacheDir.listFiles()
+            ?.filter { it.name.startsWith("vault_preview_${file.id}") }
+            ?.forEach { preview ->
+                if (preview.exists() && !preview.delete()) {
+                    throw IllegalStateException("A decrypted preview could not be removed from cache.")
+                }
+            }
         saveManifest(files().filterNot { it.id == file.id })
-        if (!File(vaultDirectory, file.id).delete()) throw IllegalStateException("The encrypted file could not be deleted.")
+        val source = file.sourceUri?.let(Uri::parse)
+        if (source != null) {
+            val deleted = runCatching {
+                if (DocumentsContract.isDocumentUri(appContext, source)) {
+                    DocumentsContract.deleteDocument(appContext.contentResolver, source)
+                } else {
+                    appContext.contentResolver.delete(source, null, null) > 0
+                }
+            }.getOrElse { failure ->
+                throw IllegalStateException("Vault copy was removed, but Android could not delete the imported original: ${failure.message ?: "permission unavailable"}.")
+            }
+            if (!deleted) {
+                throw IllegalStateException("Vault copy was removed, but Android did not delete the imported original.")
+            }
+            runCatching {
+                appContext.contentResolver.releasePersistableUriPermission(
+                    source,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+        }
     }
 
     fun storageUsage(): Long = vaultDirectory.listFiles()?.filter { it.name != "manifest.enc" && it.name != "folders.enc" && !it.name.endsWith(".tmp") }?.sumOf { it.length() } ?: 0L
@@ -337,7 +388,24 @@ class VaultManager(context: Context) {
             val encrypted = ByteArray(encryptedSize).also(payload::get)
             output.write(decryptBytes(encrypted, key, aad.toByteArray()))
         }
+
         return output.toByteArray()
+    }
+
+    private fun overwriteBeforeDelete(file: File) {
+        RandomAccessFile(file, "rw").use { output ->
+            val zeros = ByteArray(64 * 1024)
+            var remaining = file.length()
+            output.seek(0L)
+            while (remaining > 0L) {
+                val count = minOf(remaining, zeros.size.toLong()).toInt()
+                output.write(zeros, 0, count)
+                remaining -= count
+            }
+            output.setLength(0L)
+            output.fd.sync()
+        }
+        check(file.delete()) { "The encrypted file could not be deleted after overwrite." }
     }
 
     private fun saveManifest(files: List<VaultFile>) {

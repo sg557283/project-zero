@@ -8,8 +8,9 @@ enum class SpeechLanguage(val tag: String, val label: String) {
 }
 
 enum class VoiceLibraryCategory(val label: String) {
-    Simple("Simple"),
-    EmotionBased("Emotion-Based"),
+    HumanoidFemale("Humanoid Female"),
+    HumanoidMale("Humanoid Male"),
+    MultiSpeaker("Multi-Speaker"),
     OfflineAI("Offline AI"),
 }
 
@@ -40,6 +41,8 @@ interface SpeechOutputEngine {
     fun setOnSpeechComplete(listener: () -> Unit) = Unit
     fun setOnSpeechError(listener: (String) -> Unit) = Unit
     fun prepareForVoiceModelRemoval(onReady: () -> Unit) = onReady()
+    fun prepareForVoiceModelRemoval(voiceId: String, onReady: () -> Unit) =
+        prepareForVoiceModelRemoval(onReady)
     fun speak(text: String): Boolean
     fun stop()
     fun shutdown()
@@ -141,6 +144,27 @@ class SpeechOutputController(
             readyStatus = SpeechOutputStatus.LanguageUnavailable(language)
         }
         engine.prepareForVoiceModelRemoval {
+            if (!closed) updateStatus(readyStatus)
+            onReady()
+        }
+    }
+
+    fun prepareForVoiceModelRemoval(voiceId: String, onReady: () -> Unit) {
+        pending.clear()
+        if (closed) {
+            onReady()
+            return
+        }
+        engine.stop()
+        if (selectedVoice?.id == voiceId) {
+            selectedVoice = null
+            readyStatus = if (initialized && engine.selectOfflineVoice(language.tag)) {
+                SpeechOutputStatus.Ready(language)
+            } else {
+                SpeechOutputStatus.LanguageUnavailable(language)
+            }
+        }
+        engine.prepareForVoiceModelRemoval(voiceId) {
             if (!closed) updateStatus(readyStatus)
             onReady()
         }

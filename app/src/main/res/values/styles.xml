@@ -7,4 +7,12 @@
         <item name="android:windowBackground">#000000</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+    <style name="Theme.ZERO.WidgetTrigger" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.25</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
 </resources>

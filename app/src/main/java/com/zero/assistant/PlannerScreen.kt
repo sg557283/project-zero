@@ -1,5 +1,10 @@
 package com.zero.assistant
 
+import android.app.AlarmManager
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.zero.assistant.core.PlannerReminder
@@ -50,6 +56,7 @@ internal fun PlannerScreen(
     onRequestNotifications: () -> Unit,
     onCreateFromVoice: ((String) -> Unit) -> Unit,
 ) {
+    val context = LocalContext.current
     var reminders by remember { mutableStateOf(repository.all()) }
     var editing by remember { mutableStateOf<PlannerReminder?>(null) }
     var title by remember(initialTitle) { mutableStateOf(initialTitle.orEmpty()) }
@@ -124,7 +131,26 @@ internal fun PlannerScreen(
                     if (editing != null) TextButton(onClick = ::resetForm) { Text("Cancel edit") }
                     TextButton(onClick = { onCreateFromVoice { transcript -> title = transcript } }) { Text("Fill from voice") }
                 }
-                Text("Reminders use inexact Android scheduling. Delivery may be delayed by Android power management.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val exactAlarmsAllowed = Build.VERSION.SDK_INT < 31 ||
+                    context.getSystemService(AlarmManager::class.java)?.canScheduleExactAlarms() == true
+                Text(
+                    if (exactAlarmsAllowed) "Exact alarms are enabled. Android can still defer delivery in some power-saving modes."
+                    else "Exact-alarm access is off; reminders use a best-effort fallback and may be late.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!exactAlarmsAllowed && Build.VERSION.SDK_INT >= 31) {
+                    TextButton(onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                    Uri.parse("package:${context.packageName}"),
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }.onFailure { error = it.message ?: "Exact-alarm settings could not be opened." }
+                    }) { Text("Allow exact alarms") }
+                }
             }
         }
         Spacer(Modifier.height(8.dp))
