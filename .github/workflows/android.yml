@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - master
+      - agents/**
 
 permissions:
   contents: read
